@@ -4,5 +4,58 @@ from ..contracts import *  # noqa
 
 def run(pages: list[Page], cfg: dict) -> list[Page]:
     """Classical preprocessing. IMPLEMENT."""
-    raise NotImplementedError("Stage 1: preprocess")
+    from pathlib import Path
 
+    import cv2
+
+    settings = cfg.get("preprocess", {})
+    output_dir = Path(settings.get("output_dir", "data/interim/preprocessed"))
+    denoise_strength = settings.get("denoise_strength", 10)
+    block_size = settings.get("adaptive_block_size", 31)
+    threshold_offset = settings.get("adaptive_c", 15)
+
+    if block_size < 3 or block_size % 2 == 0:
+        raise ValueError("preprocess.adaptive_block_size must be an odd integer of at least 3")
+
+    processed_pages: list[Page] = []
+    for page in pages:
+        image = cv2.imread(page.image_path, cv2.IMREAD_GRAYSCALE)
+        if image is None:
+            raise FileNotFoundError(f"Could not read page image: {page.image_path}")
+
+        inverted = cv2.threshold(image, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)[1]
+        coordinates = cv2.findNonZero(inverted)
+        if coordinates is not None:
+            angle = cv2.minAreaRect(coordinates)[-1]
+            if angle < -45:
+                angle += 90
+            rotation = cv2.getRotationMatrix2D(
+                (image.shape[1] // 2, image.shape[0] // 2), angle, 1.0
+            )
+            image = cv2.warpAffine(
+                image,
+                rotation,
+                (image.shape[1], image.shape[0]),
+                flags=cv2.INTER_CUBIC,
+                borderMode=cv2.BORDER_REPLICATE,
+            )
+
+        denoised = cv2.fastNlMeansDenoising(image, None, denoise_strength, 7, 21)
+        processed = cv2.adaptiveThreshold(
+            denoised,
+            255,
+            cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
+            cv2.THRESH_BINARY,
+            block_size,
+            threshold_offset,
+        )
+
+        output_path = output_dir / page.doc_id / f"{Path(page.image_path).stem}.png"
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        if not cv2.imwrite(str(output_path), processed):
+            raise OSError(f"Could not write preprocessed page: {output_path}")
+        processed_pages.append(
+            page.model_copy(update={"image_path": output_path.as_posix()})
+        )
+
+    return processed_pages
