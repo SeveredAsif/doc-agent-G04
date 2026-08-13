@@ -21,7 +21,7 @@ def build_knowledge_base(cfg: dict) -> None:
     regions = layout.detect(pages, cfg)             # Stage 2
     print("Regions detected")
     text = ocr.transcribe(regions, cfg)             # Stage 3
-    print(text[4].text)
+    print(text)
     hooks.run(hooks.AFTER_OCR, {"chunks": text})    # e.g. PII redaction on extracted text
     chunks = chunk.split(text, cfg)                 # Stage 4
     hooks.run(hooks.BEFORE_INDEX, {"chunks": chunks})
