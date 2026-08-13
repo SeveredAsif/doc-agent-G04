@@ -47,3 +47,81 @@ make eval         # metrics on tasks.jsonl
 make serve        # FastAPI + Gradio
 ```
 See `STRUCTURE.md` for the rules CI enforces.
+
+## Bangla OCR with Tesseract
+
+This project uses Tesseract as its printed Bangla/English OCR baseline. It
+receives one line crop at a time from `vision/layout.py`, using the `ben+eng`
+language setting in `configs/config.yaml`. The engine is a machine dependency;
+the language files are project-local so a fresh clone can reproduce the OCR
+configuration.
+
+### One-command A2 build
+
+After the corpus has been placed in `data/raw/` and Python dependencies have
+been installed, run the following from a POSIX shell:
+
+```bash
+bash scripts/build_index.sh
+```
+
+This is the required A2 entrypoint declared by `grading_kit/manifest.yaml`. It
+installs Tesseract if it is missing (Homebrew on macOS, apt/dnf/pacman on Linux,
+or winget from Git Bash on Windows), downloads the exact Bangla and English
+language files, then runs Stages 1--4 exactly once:
+
+```text
+load -> preprocess -> layout -> Tesseract OCR -> chunk -> embed -> FAISS store
+```
+
+On Windows, run the command in Git Bash or WSL. The automatic install may ask
+for an administrator password on Linux or a Windows package-manager prompt.
+The script needs `curl` (it is normally present; apt/dnf/pacman install it when
+they install Tesseract). It deliberately does not download the corpus: the
+A1 `scripts/get_data.sh` / `data/raw/` data contract owns that step.
+
+### Manual installation
+
+Install the engine first if you prefer not to let the script do it:
+
+```bash
+# macOS (Homebrew)
+brew install tesseract
+
+# Ubuntu/Debian
+sudo apt-get update && sudo apt-get install -y tesseract-ocr curl
+
+# Fedora
+sudo dnf install -y tesseract curl
+
+# Arch
+sudo pacman -Sy --needed tesseract curl
+
+# Windows PowerShell
+winget install --id UB-Mannheim.TesseractOCR --exact
+```
+
+Download the official high-accuracy Tesseract language files from
+`tesseract-ocr/tessdata_best` and put them here (the build script does this
+automatically):
+
+```text
+data/interim/tessdata/ben.traineddata
+data/interim/tessdata/eng.traineddata
+```
+
+Manual download command:
+
+```bash
+mkdir -p data/interim/tessdata
+curl -fL https://github.com/tesseract-ocr/tessdata_best/raw/main/ben.traineddata \
+  -o data/interim/tessdata/ben.traineddata
+curl -fL https://github.com/tesseract-ocr/tessdata_best/raw/main/eng.traineddata \
+  -o data/interim/tessdata/eng.traineddata
+```
+
+The repo deliberately references this directory through
+`ocr.tessdata_dir`; do not copy the files into a global Tesseract installation.
+If Tesseract is installed outside `PATH`, set `ocr.tesseract_cmd` in
+`configs/config.yaml` to the full executable path. Use `PYTHONUTF8=1` in a
+shell that cannot print Bangla text correctly.
