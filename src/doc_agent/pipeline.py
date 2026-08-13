@@ -23,9 +23,12 @@ def build_knowledge_base(cfg: dict) -> None:
     text = ocr.transcribe(regions, cfg)             # Stage 3
     print(text)
     hooks.run(hooks.AFTER_OCR, {"chunks": text})    # e.g. PII redaction on extracted text
-    chunks = chunk.split(text, cfg)                 # Stage 4
+    chunks = chunk.split(text, cfg)  
+    print(chunks)               # Stage 4
     hooks.run(hooks.BEFORE_INDEX, {"chunks": chunks})
     vectors = embed.encode(chunks, cfg)
+    print(vectors)
+    print("Entering store")
     store.build(chunks, vectors, cfg)
 
 def answer(query_text: str, cfg: dict):

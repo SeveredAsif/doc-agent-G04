@@ -18,7 +18,6 @@ def run(pages: list[Page], cfg: dict) -> list[Page]:
     if block_size < 3 or block_size % 2 == 0:
         raise ValueError("preprocess.adaptive_block_size must be an odd integer of at least 3")
 
-    count = 0
     if max_pages is not None:
         max_pages = int(max_pages)
         if max_pages <= 0:
@@ -27,9 +26,6 @@ def run(pages: list[Page], cfg: dict) -> list[Page]:
 
     processed_pages: list[Page] = []
     for page in pages:
-        count +=1
-        if(count==10):
-            break
         image = cv2.imread(page.image_path, cv2.IMREAD_GRAYSCALE)
         if image is None:
             raise FileNotFoundError(f"Could not read page image: {page.image_path}")

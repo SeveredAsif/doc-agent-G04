@@ -1,10 +1,22 @@
 #!/usr/bin/env bash
 # A2 - one-command, reproducible knowledge-base build (Stages 1-4).
-# Run from any POSIX shell: macOS/Linux Terminal, WSL, or Git Bash on Windows.
+# Run from macOS/Linux Terminal, WSL, or Git Bash on Windows.
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
+
+# When this repository is opened through WSL but its dependencies were
+# installed in the Windows .venv, use that interpreter and its Windows
+# Tesseract installation rather than asking WSL to install a second stack.
+PYTHON_BIN="${PYTHON_BIN:-python}"
+WINDOWS_TESSERACT_AVAILABLE=false
+if [ -n "${WSL_INTEROP:-}" ] && [ -x ".venv/Scripts/python.exe" ]; then
+  PYTHON_BIN=".venv/Scripts/python.exe"
+  if [ -x "/mnt/c/Program Files/Tesseract-OCR/tesseract.exe" ]; then
+    WINDOWS_TESSERACT_AVAILABLE=true
+  fi
+fi
 
 install_tesseract() {
   case "$(uname -s)" in
@@ -44,18 +56,17 @@ install_tesseract() {
   esac
 }
 
-# The standard Windows installer does not always update Git Bash's PATH.
 if ! command -v tesseract >/dev/null 2>&1 && [ -x "/c/Program Files/Tesseract-OCR/tesseract.exe" ]; then
   export PATH="$PATH:/c/Program Files/Tesseract-OCR"
 fi
-if ! command -v tesseract >/dev/null 2>&1; then
+if ! $WINDOWS_TESSERACT_AVAILABLE && ! command -v tesseract >/dev/null 2>&1; then
   echo "Tesseract is not installed; attempting platform-specific installation..."
   install_tesseract
 fi
-command -v tesseract >/dev/null 2>&1 || {
+if ! $WINDOWS_TESSERACT_AVAILABLE && ! command -v tesseract >/dev/null 2>&1; then
   echo "Tesseract installation did not put the executable on PATH." >&2
   exit 1
-}
+fi
 
 TESSDATA_DIR="data/interim/tessdata"
 mkdir -p "$TESSDATA_DIR"
@@ -69,5 +80,4 @@ for language in ben eng; do
   fi
 done
 
-# This invokes load -> preprocess -> layout -> OCR -> chunk -> embed -> store once.
-PYTHONUTF8=1 python scripts/run_index.py
+PYTHONUTF8=1 "$PYTHON_BIN" scripts/run_index.py

@@ -1,8 +1,8 @@
 {
-  "built_at": "2026-08-13T12:19:50.226246+00:00",
-  "chunk_count": 4,
+  "built_at": "2026-08-13T15:25:44.321078+00:00",
+  "chunk_count": 38,
   "embedding_dim": 384,
   "embedding_model": "sentence-transformers/all-MiniLM-L6-v2",
-  "index_type": "faiss:flat",
+  "index_type": "faiss:flat-ip",
   "normalized_vectors": true
 }

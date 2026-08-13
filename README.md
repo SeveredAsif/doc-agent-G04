@@ -65,6 +65,49 @@ been installed, run the following from a POSIX shell:
 bash scripts/build_index.sh
 ```
 
+If Bash reports an error ending in `\r` or `$'\r'`, your Git client checked
+out the shell script with Windows CRLF line endings. Run this once in the
+repository, then save `scripts/build_index.sh` with LF line endings (in VS
+Code, click `CRLF` in the status bar and select `LF`):
+
+```bash
+git config core.autocrlf input
+```
+
+Use `bash scripts/build_index.sh`, rather than running the `.sh` file directly
+from PowerShell.
+
+### Five-page build and retrieval demo
+
+For a quick local demonstration, run this in PowerShell. It overrides the
+development page limit only in memory: five pages are processed, indexed, then
+the same persisted index is queried. Change the Bangla query to test another
+topic.
+
+```powershell
+$env:PYTHONUTF8 = "1"
+@'
+from doc_agent import config, pipeline
+from doc_agent.retrieval.retriever import Retriever
+
+cfg = config.load()
+cfg["preprocess"]["max_pages"] = 5
+
+# Stages 1-4: pages -> preprocessing -> layout -> OCR -> chunks -> embeddings -> FAISS.
+pipeline.build_knowledge_base(cfg)
+
+# Stage 5: load the just-written index and retrieve its top three passages.
+for rank, hit in enumerate(Retriever(cfg).retrieve("বাস্তব সংখ্যা ও সেট", k=3), start=1):
+    print(f"\\n#{rank} score={hit.score:.3f} page={hit.page_ids[0]}")
+    print(hit.text)
+'@ | .\.venv\Scripts\python.exe -
+```
+
+The resulting index is stored in `data/processed/index/` as `index.faiss`,
+`chunks.jsonl`, and `metadata.json`. For a full A2 corpus build, set
+`preprocess.max_pages` to the desired count (or remove it) and use
+`bash scripts/build_index.sh`.
+
 This is the required A2 entrypoint declared by `grading_kit/manifest.yaml`. It
 installs Tesseract if it is missing (Homebrew on macOS, apt/dnf/pacman on Linux,
 or winget from Git Bash on Windows), downloads the exact Bangla and English
@@ -79,6 +122,10 @@ for an administrator password on Linux or a Windows package-manager prompt.
 The script needs `curl` (it is normally present; apt/dnf/pacman install it when
 they install Tesseract). It deliberately does not download the corpus: the
 A1 `scripts/get_data.sh` / `data/raw/` data contract owns that step.
+
+If you open this Windows checkout in WSL, the script detects the existing
+`.venv/Scripts/python.exe` and Windows Tesseract installation and reuses them;
+it does not require a second WSL virtual environment or OCR installation.
 
 ### Manual installation
 

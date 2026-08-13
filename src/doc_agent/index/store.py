@@ -29,7 +29,6 @@ def _faiss_index(vectors: np.ndarray, index_type: str):
         raise ValueError("vectors must be a 2D array")
     dim = vectors.shape[1]
     normalized = np.ascontiguousarray(vectors.astype(np.float32))
-
     if index_type in {"faiss:flat", "faiss:flat-ip", "flat"}:
         index = faiss.IndexFlatIP(dim)
     elif index_type == "faiss:hnsw":
@@ -45,7 +44,6 @@ def _faiss_index(vectors: np.ndarray, index_type: str):
 def build(chunks, vectors, cfg: dict) -> None:
     """Persist a FAISS index plus chunk and build metadata sidecars."""
     import faiss
-
     vectors = np.asarray(vectors, dtype=np.float32)
     if len(chunks) != len(vectors):
         raise ValueError(f"chunks/vectors length mismatch: {len(chunks)} != {len(vectors)}")
@@ -55,7 +53,6 @@ def build(chunks, vectors, cfg: dict) -> None:
     index_cfg = cfg.get("index", {})
     output_dir = _index_dir(cfg)
     output_dir.mkdir(parents=True, exist_ok=True)
-
     index_type = index_cfg.get("type", "faiss:flat")
     index = _faiss_index(vectors, index_type)
     faiss.write_index(index, str(output_dir / "index.faiss"))
