@@ -16,7 +16,7 @@ def build_knowledge_base(cfg: dict) -> None:
     pages = preprocess.run(pages, cfg)
     print("Pages pre processed")
     #pages = enhance.run(pages, cfg)                 # Stage 1 - enhancement (VAE/diffusion)
-    print("Pages enhanced")
+    # print("Pages enhanced")
     hooks.run(hooks.AFTER_INGEST, {"pages": pages})
     regions = layout.detect(pages, cfg)             # Stage 2
     print("Regions detected")
@@ -28,7 +28,7 @@ def build_knowledge_base(cfg: dict) -> None:
     hooks.run(hooks.BEFORE_INDEX, {"chunks": chunks})
     vectors = embed.encode(chunks, cfg)
     print(vectors)
-    print("Entering store")
+    print("Entering vector store")
     store.build(chunks, vectors, cfg)
 
 def answer(query_text: str, cfg: dict):
