@@ -55,45 +55,60 @@ def detect(pages: list[Page], cfg: dict) -> list[Region]:
         if image is None:
             raise FileNotFoundError(f"Could not read page image: {page.image_path}")
 
-        foreground = cv2.threshold(
-            image, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU
-        )[1]
-        height, width = foreground.shape
+        candidates = [image]
+        if settings.get("retry_90deg_rotation", True):
+            candidates.extend(
+                [
+                    cv2.rotate(image, cv2.ROTATE_90_CLOCKWISE),
+                    cv2.rotate(image, cv2.ROTATE_90_COUNTERCLOCKWISE),
+                ]
+            )
 
-        # Ignore the outer page border when deciding which rows contain a
-        # line. Do not erode the binary image here: Bengali vowel marks and
-        # matras contain thin strokes that a 2x2 opening can remove.
-        border = max(5, min(height, width) // 100)
-        ink = foreground.copy()
-        ink[:border, :] = 0
-        ink[height - border :, :] = 0
-        ink[:, :border] = 0
-        ink[:, width - border :] = 0
-        row_ink = np.count_nonzero(ink, axis=1)
-        active_rows = row_ink >= max(4, int(width * row_ink_fraction))
+        detected_line_boxes: list[tuple[int, int, int, int]] | None = None
+        for candidate in candidates:
+            foreground = cv2.threshold(
+                candidate, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU
+            )[1]
+            height, width = foreground.shape
 
-        line_boxes: list[tuple[int, int, int, int]] = []
-        for top, bottom in _runs(active_rows, line_gap):
-            if bottom - top < min_line_height or bottom - top > max_line_height:
-                continue
-            columns = np.flatnonzero(np.any(ink[top:bottom] > 0, axis=0))
-            if columns.size == 0:
-                continue
-            left, right = int(columns[0]), int(columns[-1]) + 1
-            if right - left < max(20, int(width * min_line_width_fraction)):
-                continue
-            crop_left, crop_top = max(0, left - padding), max(0, top - padding)
-            crop_right, crop_bottom = min(width, right + padding), min(height, bottom + padding)
-            line_boxes.append((crop_left, crop_top, crop_right - crop_left, crop_bottom - crop_top))
+            border = max(5, min(height, width) // 100)
+            ink = foreground.copy()
+            ink[:border, :] = 0
+            ink[height - border :, :] = 0
+            ink[:, :border] = 0
+            ink[:, width - border :] = 0
+            row_ink = np.count_nonzero(ink, axis=1)
+            active_rows = row_ink >= max(4, int(width * row_ink_fraction))
 
-        median_height = float(np.median([box[3] for box in line_boxes])) if line_boxes else 0.0
-        for index, bbox in enumerate(line_boxes):
+            line_boxes: list[tuple[int, int, int, int]] = []
+            for top, bottom in _runs(active_rows, line_gap):
+                if bottom - top < min_line_height or bottom - top > max_line_height:
+                    continue
+                columns = np.flatnonzero(np.any(ink[top:bottom] > 0, axis=0))
+                if columns.size == 0:
+                    continue
+                left, right = int(columns[0]), int(columns[-1]) + 1
+                if right - left < max(20, int(width * min_line_width_fraction)):
+                    continue
+                crop_left, crop_top = max(0, left - padding), max(0, top - padding)
+                crop_right, crop_bottom = min(width, right + padding), min(height, bottom + padding)
+                line_boxes.append((crop_left, crop_top, crop_right - crop_left, crop_bottom - crop_top))
+
+            if line_boxes:
+                detected_line_boxes = line_boxes
+                break
+
+        if detected_line_boxes is None:
+            detected_line_boxes = []
+
+        median_height = float(np.median([box[3] for box in detected_line_boxes])) if detected_line_boxes else 0.0
+        for index, bbox in enumerate(detected_line_boxes):
             kind = "heading" if index == 0 and bbox[3] > median_height * 1.35 else "text"
             regions.append(Region(page_id=page.id, bbox=bbox, kind=kind))
 
         if debug_output_dir:
             overlay = cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
-            for index, bbox in enumerate(line_boxes):
+            for index, bbox in enumerate(detected_line_boxes):
                 x, y, box_width, box_height = bbox
                 kind = "heading" if index == 0 and box_height > median_height * 1.35 else "text"
                 color = (255, 120, 0) if kind == "heading" else (0, 180, 0)

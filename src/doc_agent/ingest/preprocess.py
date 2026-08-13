@@ -2,6 +2,30 @@
 from __future__ import annotations
 from ..contracts import *  # noqa
 
+
+def _estimate_skew_angle(image: "np.ndarray") -> float:
+    """Estimate the dominant page rotation in degrees, robust to 90° flips."""
+    import cv2
+    import numpy as np
+
+    gray = image if image.ndim == 2 else cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    foreground = cv2.threshold(gray, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)[1]
+    coordinates = cv2.findNonZero(foreground)
+    if coordinates is None:
+        return 0.0
+
+    angle = cv2.minAreaRect(coordinates)[-1]
+    if angle < -45:
+        angle += 90.0
+    elif angle > 45:
+        angle -= 90.0
+
+    # A very small skew is not worth rotating; 90° flips are the real problem.
+    if abs(angle) < 1.0:
+        return 0.0
+    return float(angle)
+
+
 def run(pages: list[Page], cfg: dict) -> list[Page]:
     """Classical preprocessing. IMPLEMENT."""
     from pathlib import Path
@@ -30,14 +54,12 @@ def run(pages: list[Page], cfg: dict) -> list[Page]:
         if image is None:
             raise FileNotFoundError(f"Could not read page image: {page.image_path}")
 
-        inverted = cv2.threshold(image, 0, 255, cv2.THRESH_BINARY_INV + cv2.THRESH_OTSU)[1]
-        coordinates = cv2.findNonZero(inverted)
-        if coordinates is not None:
-            angle = cv2.minAreaRect(coordinates)[-1]
-            if angle < -45:
-                angle += 90
+        angle = _estimate_skew_angle(image)
+        if abs(angle) > 1.0:
             rotation = cv2.getRotationMatrix2D(
-                (image.shape[1] // 2, image.shape[0] // 2), angle, 1.0
+                (image.shape[1] / 2.0, image.shape[0] / 2.0),
+                angle,
+                1.0,
             )
             image = cv2.warpAffine(
                 image,

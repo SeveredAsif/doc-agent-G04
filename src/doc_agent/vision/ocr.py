@@ -115,6 +115,13 @@ class Reader:
 
         crop = ImageOps.expand(crop, border=int(self.cfg.get("crop_padding", 8)), fill="white")
 
+        max_pixels = int(self.cfg.get("max_crop_pixels", 2_000_000))
+        if crop.width * crop.height > max_pixels:
+            scale = (max_pixels / (crop.width * crop.height)) ** 0.5
+            new_width = max(1, int(round(crop.width * scale)))
+            new_height = max(1, int(round(crop.height * scale)))
+            crop = crop.resize((new_width, new_height), Image.Resampling.LANCZOS)
+
         if self.backend == "tesseract":
             from io import BytesIO
             import subprocess
