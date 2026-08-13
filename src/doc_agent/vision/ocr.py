@@ -17,6 +17,28 @@ class Reader:
         self.cfg = cfg["ocr"]
         self.preprocess_cfg = cfg.get("preprocess", {})
         self.device_name = cfg.get("device", "cpu")
+        self.backend = self.cfg.get("backend", "trocr").lower()
+
+        if self.backend == "tesseract":
+            from pathlib import Path
+            import shutil
+
+            configured_path = self.cfg.get("tesseract_cmd")
+            default_path = Path("C:/Program Files/Tesseract-OCR/tesseract.exe")
+            discovered_path = shutil.which("tesseract")
+            self.tesseract_cmd = str(
+                Path(configured_path)
+                if configured_path
+                else Path(discovered_path) if discovered_path else default_path
+            )
+            if not Path(self.tesseract_cmd).is_file():
+                raise FileNotFoundError(
+                    "Could not find Tesseract. Set ocr.tesseract_cmd to tesseract.exe."
+                )
+            self.tessdata_dir = self.cfg.get("tessdata_dir", "data/interim/tessdata")
+            self.tesseract_lang = self.cfg.get("languages", "ben+eng")
+            self.tesseract_psm = int(self.cfg.get("psm", 7))
+            return
 
         import torch
         from transformers import (
@@ -28,6 +50,8 @@ class Reader:
         )
 
         model_name = self.cfg["model"]
+        if self.backend != "trocr":
+            raise ValueError("ocr.backend must be 'trocr' or 'tesseract'.")
         if not model_name.startswith(_TROCR_STYLE_PREFIXES):
             raise ValueError("The OCR reader requires a TrOCR-style (VisionEncoderDecoder) model.")
 
@@ -90,6 +114,36 @@ class Reader:
         from PIL import ImageOps
 
         crop = ImageOps.expand(crop, border=int(self.cfg.get("crop_padding", 8)), fill="white")
+
+        if self.backend == "tesseract":
+            from io import BytesIO
+            import subprocess
+
+            image_bytes = BytesIO()
+            crop.save(image_bytes, format="PNG", dpi=(300, 300))
+            command = [
+                self.tesseract_cmd,
+                "stdin",
+                "stdout",
+                "--tessdata-dir",
+                self.tessdata_dir,
+                "-l",
+                self.tesseract_lang,
+                "--psm",
+                str(self.tesseract_psm),
+                "--oem",
+                "1",
+            ]
+            completed = subprocess.run(
+                command,
+                input=image_bytes.getvalue(),
+                capture_output=True,
+                check=False,
+            )
+            if completed.returncode:
+                detail = completed.stderr.decode("utf-8", errors="replace").strip()
+                raise RuntimeError(f"Tesseract failed for {region.page_id}: {detail}")
+            return completed.stdout.decode("utf-8", errors="replace").strip()
 
         pixel_values = self.processor(images=crop, return_tensors="pt").pixel_values.to(self.device)
         max_new_tokens = int(self.cfg.get("max_new_tokens", 256))
