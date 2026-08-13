@@ -85,6 +85,12 @@ class Reader:
                 raise ValueError(f"Invalid region bounding box for {region.page_id}: {region.bbox}")
             crop = image.convert("RGB").crop((left, top, right, bottom))
 
+        # A small white margin prevents glyphs at segmentation boundaries from
+        # being cut in half before the processor resizes the line crop.
+        from PIL import ImageOps
+
+        crop = ImageOps.expand(crop, border=int(self.cfg.get("crop_padding", 8)), fill="white")
+
         pixel_values = self.processor(images=crop, return_tensors="pt").pixel_values.to(self.device)
         max_new_tokens = int(self.cfg.get("max_new_tokens", 256))
         with self.torch.inference_mode():
@@ -92,17 +98,29 @@ class Reader:
         return self.processor.batch_decode(generated_ids, skip_special_tokens=True)[0].strip()
 
 def transcribe(regions: list[Region], cfg: dict) -> list[Chunk]:
-    """Regions -> text chunks. IMPLEMENT (calls Reader)."""
+    """Transcribe line regions, then preserve page reading order in chunks."""
     reader = Reader(cfg)
+    by_page: dict[str, list[str]] = {}
     chunks: list[Chunk] = []
-    for index, region in enumerate(regions):
-        doc_id = region.page_id.rsplit("__", maxsplit=1)[0]
+    for region in regions:
+        if region.kind not in {"text", "heading"}:
+            continue
+        text = reader.transcribe_region(region)
+        if not text:
+            continue
+        by_page.setdefault(region.page_id, []).append(text)
+
+    # Layout returns regions in reading order. Joining line outputs here gives
+    # Stage 4 enough context to form useful semantic retrieval chunks; keeping
+    # one Chunk per line would otherwise leave the index with isolated words.
+    for page_id, lines in by_page.items():
+        doc_id = page_id.rsplit("__", maxsplit=1)[0]
         chunks.append(
             Chunk(
-                id=f"{region.page_id}__region_{index:04d}",
+                id=f"{page_id}__region_0000",
                 doc_id=doc_id,
-                text=reader.transcribe_region(region),
-                page_ids=[region.page_id],
+                text="\n".join(lines),
+                page_ids=[page_id],
             )
         )
     return chunks
