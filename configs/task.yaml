@@ -4,4 +4,4 @@ domain: "Education"
 data_speciality: "Bangla Mathematics"   # ONE hard corpus property (English is not one)
 primary_nfr: "Calibration"
 nfr_target: "Expected Calibration Error (ECE) <= 5%"   # your concrete committed target
-corpus: {min_pages: 300, min_words: 60000, source_url: "", license: ""}
+corpus: {min_pages: 300, min_words: 60000, source_url: "https://nctb.gov.bd/pages/static-pages/695b99afc4774958d7b70612", license: "public"}
