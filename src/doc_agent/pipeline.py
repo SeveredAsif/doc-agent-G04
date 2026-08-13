@@ -10,12 +10,18 @@ from .agent import agent
 
 def build_knowledge_base(cfg: dict) -> None:
     wiring.register_all(cfg)                        # wire cross-cutting features
+    print("starting")
     pages = loader.load_pages(cfg)
+    print("Pages loaded")
     pages = preprocess.run(pages, cfg)
-    pages = enhance.run(pages, cfg)                 # Stage 1 - enhancement (VAE/diffusion)
+    print("Pages pre processed")
+    #pages = enhance.run(pages, cfg)                 # Stage 1 - enhancement (VAE/diffusion)
+    print("Pages enhanced")
     hooks.run(hooks.AFTER_INGEST, {"pages": pages})
     regions = layout.detect(pages, cfg)             # Stage 2
+    print("Regions detected")
     text = ocr.transcribe(regions, cfg)             # Stage 3
+    print(text[3].text)
     hooks.run(hooks.AFTER_OCR, {"chunks": text})    # e.g. PII redaction on extracted text
     chunks = chunk.split(text, cfg)                 # Stage 4
     hooks.run(hooks.BEFORE_INDEX, {"chunks": chunks})
