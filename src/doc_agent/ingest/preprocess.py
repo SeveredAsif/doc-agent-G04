@@ -13,17 +13,23 @@ def run(pages: list[Page], cfg: dict) -> list[Page]:
     denoise_strength = settings.get("denoise_strength", 10)
     block_size = settings.get("adaptive_block_size", 31)
     threshold_offset = settings.get("adaptive_c", 15)
+    max_pages = settings.get("max_pages")
 
     if block_size < 3 or block_size % 2 == 0:
         raise ValueError("preprocess.adaptive_block_size must be an odd integer of at least 3")
 
-    processed_pages: list[Page] = []
     count = 0
+    if max_pages is not None:
+        max_pages = int(max_pages)
+        if max_pages <= 0:
+            raise ValueError("preprocess.max_pages must be positive when set")
+        pages = pages[:max_pages]
+
+    processed_pages: list[Page] = []
     for page in pages:
-        count+=1
-        if(count==6):
+        count +=1
+        if(count==10):
             break
-        print(f"page:{count}")
         image = cv2.imread(page.image_path, cv2.IMREAD_GRAYSCALE)
         if image is None:
             raise FileNotFoundError(f"Could not read page image: {page.image_path}")

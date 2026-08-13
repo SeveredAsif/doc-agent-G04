@@ -1,0 +1,8 @@
+{
+  "built_at": "2026-08-13T12:19:50.226246+00:00",
+  "chunk_count": 4,
+  "embedding_dim": 384,
+  "embedding_model": "sentence-transformers/all-MiniLM-L6-v2",
+  "index_type": "faiss:flat",
+  "normalized_vectors": true
+}
