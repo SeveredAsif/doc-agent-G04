@@ -368,6 +368,142 @@ def _absorb_and_prune_stray_boxes(
     return [tuple(p) for p in primary] + kept_strays
 
 
+def _is_math_operator(
+    crop: np.ndarray,
+    cx: int,
+    cy: int,
+    cw: int,
+    ch: int,
+    area: int,
+    th: int,
+    stats: np.ndarray,
+    i: int,
+) -> bool:
+    """Return True if CC strictly matches a mathematical operator or symbol."""
+    if area < 10 or cw < 4 or ch < 4:
+        return False
+
+    aspect = cw / max(1, ch)
+    c_center_y = cy + ch * 0.5
+
+    # 1. Equality '=': Two separate parallel horizontal bars vertically aligned
+    if 1.1 <= aspect <= 4.5 and ch <= th * 0.30:
+        for j in range(1, len(stats)):
+            if j == i:
+                continue
+            ox, oy, ow, oh, _ = stats[j]
+            oaspect = ow / max(1, oh)
+            if 1.1 <= oaspect <= 4.5 and oh <= th * 0.30:
+                h_overlap = min(cx + cw, ox + ow) - max(cx, ox)
+                if h_overlap >= 0.65 * min(cw, ow) and 2 <= abs(oy - cy) <= int(th * 0.40):
+                    return True
+
+    # 2. Plus sign '+': Symmetric cross shape
+    if 0.75 <= aspect <= 1.30 and (th * 0.25 <= ch <= th * 0.75) and (th * 0.25 <= c_center_y <= th * 0.75):
+        cc_roi = crop[cy : cy + ch, cx : cx + cw]
+        mid_row = cc_roi[ch // 2, :]
+        mid_col = cc_roi[:, cw // 2]
+        if np.count_nonzero(mid_row) >= cw * 0.60 and np.count_nonzero(mid_col) >= ch * 0.60:
+            c_tl = np.count_nonzero(cc_roi[: max(1, ch // 3), : max(1, cw // 3)])
+            c_tr = np.count_nonzero(cc_roi[: max(1, ch // 3), cw - max(1, cw // 3) :])
+            c_bl = np.count_nonzero(cc_roi[ch - max(1, ch // 3) :, : max(1, cw // 3)])
+            c_br = np.count_nonzero(cc_roi[ch - max(1, ch // 3) :, cw - max(1, cw // 3) :])
+            if (c_tl + c_tr + c_bl + c_br) <= area * 0.25:
+                return True
+
+    # 3. Horizontal minus in math context
+    if aspect >= 2.4 and ch <= max(7, int(th * 0.22)) and (th * 0.30 <= c_center_y <= th * 0.70) and cw >= 12:
+        return True
+
+    # 4. Relational '<', '>', or arrow '\to'
+    if 0.6 <= aspect <= 2.2 and (th * 0.25 <= ch <= th * 0.70):
+        cc_roi = crop[cy : cy + ch, cx : cx + cw]
+        left_col_ink = np.count_nonzero(cc_roi[:, 0])
+        right_col_ink = np.count_nonzero(cc_roi[:, -1])
+        mid_col_ink = np.count_nonzero(cc_roi[:, cw // 2])
+        if (left_col_ink >= 2 and right_col_ink == 1 and mid_col_ink <= 2) or (
+            right_col_ink >= 2 and left_col_ink == 1 and mid_col_ink <= 2
+        ):
+            return True
+
+    return False
+
+
+def _classify_display_math_lines(
+    text_mask: np.ndarray,
+    classified_lines: list[dict[str, Any]],
+    page_w: int,
+    page_h: int,
+    median_line_height: float,
+) -> None:
+    """Classify entire line objects as kind='display_math' based on fill ratio, maatra continuity, fractions, and operators."""
+    for line in classified_lines:
+        if line["kind"] != "text":
+            continue
+        tx, ty, tw, th = line["bbox"]
+        if tw < 40 or th < 12:
+            continue
+
+        crop = text_mask[ty : ty + th, tx : tx + tw]
+        nonzero_count = np.count_nonzero(crop)
+        if nonzero_count < 20:
+            continue
+
+        fill_ratio = nonzero_count / max(1, tw * th)
+
+        # Check Maatra continuity in top headroom
+        head_top = max(1, int(th * 0.15))
+        head_bot = min(th, int(th * 0.38))
+        headroom = crop[head_top:head_bot, :]
+        head_col_active = np.any(headroom > 0, axis=0)
+        m_runs = _runs(head_col_active, max_gap=2)
+        continuous_maatra_runs = [(s, e) for s, e in m_runs if (e - s) >= 22]
+        maatra_ink_cols = sum((e - s) for s, e in continuous_maatra_runs)
+        maatra_ratio = maatra_ink_cols / max(1, tw)
+
+        # Check for multi-story fraction division bar
+        has_fraction = False
+        if th >= 38:
+            kh_frac = cv2.getStructuringElement(cv2.MORPH_RECT, (max(20, int(th * 0.40)), 1))
+            frac_layer = cv2.morphologyEx(crop, cv2.MORPH_OPEN, kh_frac)
+            frac_cnts, _ = cv2.findContours(frac_layer, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            for fc in frac_cnts:
+                fx, fy, fw, fh = cv2.boundingRect(fc)
+                if fw >= max(18, int(th * 0.35)):
+                    above_ink = np.count_nonzero(crop[max(0, fy - int(th * 0.40)) : fy, fx : fx + fw])
+                    below_ink = np.count_nonzero(crop[fy + fh : min(th, fy + fh + int(th * 0.40)), fx : fx + fw])
+                    if above_ink >= 12 and below_ink >= 12:
+                        has_fraction = True
+                        break
+
+        # Check for explicit operators
+        num_labels, labels, stats, _ = cv2.connectedComponentsWithStats(crop, connectivity=8)
+        has_math_operators = False
+        if num_labels > 1:
+            for i in range(1, num_labels):
+                cx, cy, cw, ch, area = stats[i]
+                if _is_math_operator(crop, cx, cy, cw, ch, area, th, stats, i):
+                    has_math_operators = True
+                    break
+
+        is_math = False
+        # 1. Multi-story fractions with non-dense maatra
+        if has_fraction and maatra_ratio < 0.35:
+            is_math = True
+        # 2. Low fill ratio (< 0.10) + confirmed math operators + low maatra (< 0.28)
+        elif fill_ratio < 0.10 and has_math_operators and maatra_ratio < 0.28:
+            is_math = True
+        # 3. Very low maatra (< 0.12) + confirmed math operators
+        elif maatra_ratio < 0.12 and has_math_operators:
+            is_math = True
+        # 4. Standalone / indented low-fill formula (fill < 0.08, maatra < 0.22, tw < page_w * 0.80)
+        elif fill_ratio < 0.08 and maatra_ratio < 0.22 and tw < page_w * 0.80 and (has_math_operators or th >= 40):
+            is_math = True
+
+        if is_math:
+            line["kind"] = "display_math"
+
+
 def _sort_reading_order(
     elements: list[dict[str, Any]], width: int, height: int
 ) -> list[dict[str, Any]]:
@@ -399,7 +535,7 @@ def _sort_reading_order(
 
 
 def detect(pages: list[Page], cfg: dict) -> list[Region]:
-    """Detect OCR-ready text lines, headings, figures, and tables in reading order."""
+    """Detect OCR-ready text lines, headings, figures, tables, and math expressions in reading order."""
     settings = cfg.get("layout", {})
     row_ink_fraction = float(settings.get("row_ink_fraction", 0.002))
     line_gap = int(settings.get("line_gap", 18))
@@ -408,6 +544,7 @@ def detect(pages: list[Page], cfg: dict) -> list[Region]:
     pad_x = int(settings.get("line_padding_x", 8))
     heading_factor = float(settings.get("heading_factor", 1.45))
     debug_output_dir = settings.get("debug_output_dir")
+    detect_math = bool(settings.get("detect_math", True))
 
     regions: list[Region] = []
 
@@ -489,7 +626,11 @@ def detect(pages: list[Page], cfg: dict) -> list[Region]:
 
             classified_lines.append({"bbox": bbox, "kind": kind, "x": x, "y": y, "w": w, "h": h})
 
-        # 8. Combine all elements and sort reading order
+        # 9. Math Detection (Whole-Line display_math classification)
+        if detect_math:
+            _classify_display_math_lines(text_only, classified_lines, width, height, median_height)
+
+        # 10. Combine all elements and sort reading order
         all_elements = classified_lines + [
             {
                 "bbox": fb["bbox"],
@@ -507,13 +648,16 @@ def detect(pages: list[Page], cfg: dict) -> list[Region]:
         for elem in ordered_elements:
             regions.append(Region(page_id=page.id, bbox=elem["bbox"], kind=elem["kind"]))
 
-        # 9. Debug Visualization Overlay
+        # 11. Debug Visualization Overlay
         if debug_output_dir:
             color_map = {
-                "heading": (255, 191, 0),   # Deep Sky Blue
-                "text": (50, 205, 50),      # Lime Green
-                "figure": (0, 0, 230),      # Red
-                "table": (0, 215, 255),     # Gold
+                "heading": (255, 191, 0),       # Deep Sky Blue
+                "text": (50, 205, 50),          # Lime Green
+                "figure": (0, 0, 230),          # Red
+                "table": (0, 215, 255),         # Gold
+                "inline_math": (255, 0, 255),   # Magenta
+                "display_math": (180, 0, 255),  # Electric Purple
+                "math": (255, 0, 255),          # Magenta
             }
             overlay = cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
             for index, elem in enumerate(ordered_elements):
@@ -521,7 +665,8 @@ def detect(pages: list[Page], cfg: dict) -> list[Region]:
                 bkind = elem["kind"]
                 color = color_map.get(bkind, (0, 255, 255))
                 cv2.rectangle(overlay, (bx, by), (bx + bw, by + bh), color, 2)
-                tag_str = f"{index}:{bkind[0].upper()}"
+                tag_label = "M" if "math" in bkind else bkind[0].upper()
+                tag_str = f"{index}:{tag_label}"
                 cv2.putText(
                     overlay,
                     tag_str,
