@@ -164,7 +164,7 @@ def transcribe(regions: list[Region], cfg: dict) -> list[Chunk]:
     by_page: dict[str, list[str]] = {}
     chunks: list[Chunk] = []
     for region in regions:
-        if region.kind not in {"text", "heading"}:
+        if region.kind not in {"text", "heading", "math"}:
             continue
         text = reader.transcribe_region(region)
         if not text:
