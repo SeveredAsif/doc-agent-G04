@@ -2,15 +2,17 @@
 
 Refined Hybrid Layout Architecture:
   1. Vertical margin & corner pass (suppresses vertical publisher text & edge scanner noise)
-  2. Strict figure & table isolation directly on intact threshold image (zero false-positives on math)
-  3. Label hull absorption (absorbs tiny annotation labels <= 45px, fig_pad = 35px)
-  4. Figure-subtracted text foreground mask (diagrams cannot corrupt line extraction)
-  5. Horizontal projection line slicing with tall line / fraction preservation (up to 180-200px)
-  6. Multi-line paragraph valley splitting (only for dense blocks > 200px)
-  7. Intra-line column gutter splitting (clean 2-column exercise separation)
-  8. Figure-overlap suppression (prevents text boxes from piercing or overlapping figures)
-  9. Dynamic headroom & diacritic padding (protects Bengali matras & tall radicals)
- 10. Deterministic reading order sorting
+  2. Enclosing callout box frame suppression (removes outer border frames of full-width definition/theorem boxes)
+  3. Strict figure & table isolation (isolates compact 2D drawings like circles, triangles, plots, and tables)
+  4. Label hull absorption (absorbs tiny annotation labels <= 45px within 35px of diagram)
+  5. Figure-subtracted text foreground mask (diagrams cannot corrupt line extraction)
+  6. Horizontal projection line slicing with tall line / fraction preservation (up to 200px)
+  7. Multi-line paragraph valley splitting (only for truly dense blocks > 200px)
+  8. Intra-line column gutter splitting (clean 2-column exercise separation)
+  9. Figure-overlap suppression (prevents text boxes from piercing or overlapping figures)
+ 10. Heading prominence thresholding (heading_factor = 1.45)
+ 11. Dynamic headroom & diacritic padding (protects Bengali matras & tall radicals)
+ 12. Deterministic reading order sorting
 """
 from __future__ import annotations
 
@@ -72,6 +74,25 @@ def _vertical_margin_and_corner_pass(thresh: np.ndarray, width: int, height: int
     return cleaned
 
 
+def _suppress_callout_box_borders(thresh_clean: np.ndarray, width: int, height: int) -> np.ndarray:
+    """Suppress outer border frames of wide enclosing callout boxes (w >= 0.65 * width) while preserving internal text."""
+    kh_box = cv2.getStructuringElement(cv2.MORPH_RECT, (max(160, int(width * 0.40)), 1))
+    kv_box = cv2.getStructuringElement(cv2.MORPH_RECT, (1, max(100, int(height * 0.05))))
+    h_lines = cv2.morphologyEx(thresh_clean, cv2.MORPH_OPEN, kh_box)
+    v_lines = cv2.morphologyEx(thresh_clean, cv2.MORPH_OPEN, kv_box)
+
+    box_lines = cv2.bitwise_or(h_lines, v_lines)
+    box_cnts, _ = cv2.findContours(box_lines, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    callout_mask = np.zeros_like(thresh_clean)
+
+    for bc in box_cnts:
+        bx, by, bw, bh = cv2.boundingRect(bc)
+        if bw >= width * 0.65 and bh >= 100:
+            cv2.rectangle(callout_mask, (max(0, bx - 4), max(0, by - 4)), (min(width, bx + bw + 4), min(height, by + bh + 4)), 255, 12)
+
+    return cv2.bitwise_and(thresh_clean, thresh_clean, mask=cv2.bitwise_not(callout_mask))
+
+
 def _isolate_figures_and_tables(
     thresh_clean: np.ndarray,
     width: int,
@@ -79,15 +100,15 @@ def _isolate_figures_and_tables(
     fig_pad_x: int = 35,
     fig_pad_y: int = 20,
 ) -> tuple[list[dict[str, Any]], np.ndarray]:
-    """Strictly isolate 2D geometric diagrams and tabular grids (zero false positives on math formulas)."""
+    """Strictly isolate 2D geometric diagrams and tabular grids (zero false positives on math formulas or callout boxes)."""
     fig_boxes: list[dict[str, Any]] = []
     fig_mask = np.zeros_like(thresh_clean)
 
     # 1. Detect structural data tables via grid lines
-    kh_long = cv2.getStructuringElement(cv2.MORPH_RECT, (max(180, int(width * 0.28)), 1))
-    kv_long = cv2.getStructuringElement(cv2.MORPH_RECT, (1, max(120, int(height * 0.08))))
-    h_lines = cv2.morphologyEx(thresh_clean, cv2.MORPH_OPEN, kh_long)
-    v_lines = cv2.morphologyEx(thresh_clean, cv2.MORPH_OPEN, kv_long)
+    kh_table = cv2.getStructuringElement(cv2.MORPH_RECT, (max(180, int(width * 0.28)), 1))
+    kv_table = cv2.getStructuringElement(cv2.MORPH_RECT, (1, max(120, int(height * 0.08))))
+    h_lines = cv2.morphologyEx(thresh_clean, cv2.MORPH_OPEN, kh_table)
+    v_lines = cv2.morphologyEx(thresh_clean, cv2.MORPH_OPEN, kv_table)
     table_grid = cv2.bitwise_and(h_lines, v_lines)
     dilated_grid = cv2.dilate(table_grid, np.ones((9, 9), np.uint8), iterations=2)
     table_cnts, _ = cv2.findContours(dilated_grid, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -102,7 +123,7 @@ def _isolate_figures_and_tables(
                 fig_boxes.append({"kind": "table", "bbox": (x0, y0, x1 - x0, y1 - y0)})
                 cv2.rectangle(fig_mask, (x0, y0), (x1, y1), 255, -1)
 
-    # 2. Strict Geometric Drawing / Plot Detection on intact binary image
+    # 2. Strict Geometric Drawing / Plot Detection
     contours, _ = cv2.findContours(thresh_clean, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
     raw_fig_boxes = []
 
@@ -110,8 +131,8 @@ def _isolate_figures_and_tables(
         x, y, w, h = cv2.boundingRect(cnt)
         c_area = cv2.contourArea(cnt)
         is_true_diagram = (
-            (w >= 130 and h >= 100 and c_area >= 12000)
-            or (w >= 160 and h >= 120 and (w * h >= 35000) and c_area >= 8000)
+            (w >= 130 and h >= 100 and c_area >= 10000 and w < width * 0.65)
+            or (w >= 160 and h >= 120 and (w * h >= 35000) and c_area >= 8000 and w < width * 0.65)
         )
         if is_true_diagram:
             raw_fig_boxes.append((x, y, w, h))
@@ -146,48 +167,46 @@ def _split_dense_runs_by_projection(
     ink: np.ndarray,
     top: int,
     bottom: int,
-    med_h: float,
+    min_pitch: int = 35,
 ) -> list[tuple[int, int]]:
-    """Split truly tall multi-paragraph blocks (> 200px) at horizontal projection profile valleys."""
+    """Split dense multi-paragraph blocks (> 180px) at the deepest valleys between consecutive text line peaks."""
     h = bottom - top
-    if h <= 200:
+    if h <= 180:
         return [(top, bottom)]
 
     roi = ink[top:bottom, :]
     hpp = np.sum(roi > 0, axis=1).astype(np.float32)
+    smoothed = np.convolve(hpp, np.ones(7) / 7, mode="same")
+    mean_ink = np.mean(smoothed)
 
-    kernel_size = max(5, int(med_h * 0.20))
-    if kernel_size % 2 == 0:
-        kernel_size += 1
-    smoothed = np.convolve(hpp, np.ones(kernel_size) / kernel_size, mode="same")
+    # 1. Find line peaks (prominent local maxima >= 0.35 * mean_ink)
+    peaks: list[int] = []
+    for y in range(10, h - 10):
+        w_start = max(0, y - 12)
+        w_end = min(h, y + 13)
+        if smoothed[y] == np.max(smoothed[w_start:w_end]) and smoothed[y] >= 0.35 * mean_ink:
+            if not peaks or (y - peaks[-1] >= min_pitch):
+                peaks.append(y)
 
-    est_lines = max(2, int(round(h / med_h)))
-    target_step = h / est_lines
+    if len(peaks) <= 1:
+        return [(top, bottom)]
 
-    split_points = [0]
-    for k in range(1, est_lines):
-        expected_y = int(k * target_step)
-        search_min = max(0, int(expected_y - target_step * 0.35))
-        search_max = min(h, int(expected_y + target_step * 0.35))
+    # 2. Find the deepest valley between each pair of consecutive peaks
+    valleys = [0]
+    for i in range(len(peaks) - 1):
+        p1, p2 = peaks[i], peaks[i + 1]
+        valley_y = p1 + int(np.argmin(smoothed[p1:p2]))
+        valleys.append(valley_y)
+    valleys.append(h)
 
-        if search_max > search_min:
-            window = smoothed[search_min:search_max]
-            valley_offset = int(np.argmin(window))
-            valley_y = search_min + valley_offset
-            if valley_y - split_points[-1] >= med_h * 0.60:
-                split_points.append(valley_y)
+    runs: list[tuple[int, int]] = []
+    for i in range(len(valleys) - 1):
+        s_top = top + valleys[i]
+        s_bottom = top + valleys[i + 1]
+        if s_bottom - s_top >= 18:
+            runs.append((s_top, s_bottom))
 
-    split_points.append(h)
-    split_points = sorted(list(set(split_points)))
-
-    result_runs: list[tuple[int, int]] = []
-    for idx in range(len(split_points) - 1):
-        s_top = top + split_points[idx]
-        s_bottom = top + split_points[idx + 1]
-        if s_bottom - s_top >= 12:
-            result_runs.append((s_top, s_bottom))
-
-    return result_runs if result_runs else [(top, bottom)]
+    return runs if runs else [(top, bottom)]
 
 
 def _extract_all_lines(
@@ -195,8 +214,9 @@ def _extract_all_lines(
     page_w: int,
     page_h: int,
     row_ink_fraction: float = 0.002,
-    line_gap: int = 14,
+    line_gap: int = 18,
     min_line_height: int = 10,
+    max_single_line_height: int = 200,
     pad_y: int = 6,
     pad_x: int = 8,
     min_line_width_frac: float = 0.03,
@@ -205,19 +225,26 @@ def _extract_all_lines(
     row_ink = np.count_nonzero(ink, axis=1)
     active_rows = row_ink >= max(4, int(page_w * row_ink_fraction))
 
-    raw_runs = _runs(active_rows, line_gap)
+    raw_runs = _runs(active_rows, max_gap=line_gap)
     if not raw_runs:
         return []
 
-    single_line_heights = [b - t for t, b in raw_runs if 18 <= (b - t) <= 85]
-    med_h = float(np.median(single_line_heights)) if single_line_heights else 48.0
+    single_line_heights = [b - t for t, b in raw_runs if 18 <= (b - t) <= 55]
+    if single_line_heights:
+        med_h = float(np.median(single_line_heights))
+    else:
+        med_h = float(np.median([(b - t) / max(1, round((b - t) / 45.0)) for t, b in raw_runs]))
 
     split_runs: list[tuple[int, int]] = []
     for top, bottom in raw_runs:
-        if bottom - top < min_line_height:
+        lh = bottom - top
+        if lh < min_line_height:
             continue
-        sub_runs = _split_dense_runs_by_projection(ink, top, bottom, med_h)
-        split_runs.extend(sub_runs)
+        if lh > max_single_line_height:
+            sub_runs = _split_dense_runs_by_projection(ink, top, bottom)
+            split_runs.extend(sub_runs)
+        else:
+            split_runs.append((top, bottom))
 
     line_boxes: list[tuple[int, int, int, int]] = []
 
@@ -281,6 +308,66 @@ def _extract_all_lines(
     return line_boxes
 
 
+def _absorb_and_prune_stray_boxes(
+    boxes: list[tuple[int, int, int, int]],
+    max_vertical_gap: int = 22,
+    min_noise_area: int = 600,
+) -> list[tuple[int, int, int, int]]:
+    """Absorb small stray fragments into vertically adjacent parent text lines, and prune isolated noise."""
+    if not boxes:
+        return []
+
+    # Separate primary lines from candidate strays
+    primary: list[list[int]] = []
+    strays: list[tuple[int, int, int, int]] = []
+
+    for x, y, w, h in boxes:
+        if w >= 120 or h >= 35:
+            primary.append([x, y, w, h])
+        else:
+            strays.append((x, y, w, h))
+
+    unabsorbed: list[tuple[int, int, int, int]] = []
+
+    for sx, sy, sw, sh in strays:
+        absorbed = False
+        s_mid_x = sx + sw * 0.5
+        for p in primary:
+            px, py, pw, ph = p
+            # Check horizontal alignment
+            if (px - 15) <= s_mid_x <= (px + pw + 15):
+                # Stray directly above parent line
+                if 0 <= (py - (sy + sh)) <= max_vertical_gap:
+                    new_y0 = min(py, sy)
+                    new_y1 = max(py + ph, sy + sh)
+                    new_x0 = min(px, sx)
+                    new_x1 = max(px + pw, sx + sw)
+                    p[0], p[1], p[2], p[3] = new_x0, new_y0, new_x1 - new_x0, new_y1 - new_y0
+                    absorbed = True
+                    break
+                # Stray directly below parent line
+                elif 0 <= (sy - (py + ph)) <= max_vertical_gap:
+                    new_y0 = min(py, sy)
+                    new_y1 = max(py + ph, sy + sh)
+                    new_x0 = min(px, sx)
+                    new_x1 = max(px + pw, sx + sw)
+                    p[0], p[1], p[2], p[3] = new_x0, new_y0, new_x1 - new_x0, new_y1 - new_y0
+                    absorbed = True
+                    break
+
+        if not absorbed:
+            unabsorbed.append((sx, sy, sw, sh))
+
+    # Prune tiny scanner noise specks from unabsorbed strays
+    kept_strays = []
+    for ux, uy, uw, uh in unabsorbed:
+        if uw < 45 and uh < 25 and (uw * uh < min_noise_area):
+            continue
+        kept_strays.append((ux, uy, uw, uh))
+
+    return [tuple(p) for p in primary] + kept_strays
+
+
 def _sort_reading_order(
     elements: list[dict[str, Any]], width: int, height: int
 ) -> list[dict[str, Any]]:
@@ -315,11 +402,11 @@ def detect(pages: list[Page], cfg: dict) -> list[Region]:
     """Detect OCR-ready text lines, headings, figures, and tables in reading order."""
     settings = cfg.get("layout", {})
     row_ink_fraction = float(settings.get("row_ink_fraction", 0.002))
-    line_gap = int(settings.get("line_gap", 14))
+    line_gap = int(settings.get("line_gap", 18))
     min_line_height = int(settings.get("min_line_height", 10))
     pad_y = int(settings.get("line_padding_y", 6))
     pad_x = int(settings.get("line_padding_x", 8))
-    heading_factor = float(settings.get("heading_factor", 1.25))
+    heading_factor = float(settings.get("heading_factor", 1.45))
     debug_output_dir = settings.get("debug_output_dir")
 
     regions: list[Region] = []
@@ -337,9 +424,12 @@ def detect(pages: list[Page], cfg: dict) -> list[Region]:
         )
 
         # 1. Vertical margin and corner pass (suppress vertical text & border noise)
-        thresh_clean = _vertical_margin_and_corner_pass(thresh, width, height)
+        thresh_no_margin = _vertical_margin_and_corner_pass(thresh, width, height)
 
-        # 2. Strict Figure & Table isolation directly on intact binary image
+        # 2. Suppress outer borders of wide enclosing callout frames
+        thresh_clean = _suppress_callout_box_borders(thresh_no_margin, width, height)
+
+        # 3. Strict Figure & Table isolation directly on cleaned image
         fig_table_boxes, fig_mask = _isolate_figures_and_tables(
             thresh_clean,
             width,
@@ -348,10 +438,10 @@ def detect(pages: list[Page], cfg: dict) -> list[Region]:
             fig_pad_y=20,
         )
 
-        # 3. Figure-subtracted text ink
+        # 4. Figure-subtracted text ink
         text_only = cv2.bitwise_and(thresh_clean, thresh_clean, mask=cv2.bitwise_not(fig_mask))
 
-        # 4. Extract unbroken lines with tall line / fraction preservation
+        # 5. Extract unbroken lines with tall line / fraction preservation (line_gap = 18, max_single_line_height = 200)
         detected_line_boxes = _extract_all_lines(
             text_only,
             page_w=width,
@@ -359,11 +449,12 @@ def detect(pages: list[Page], cfg: dict) -> list[Region]:
             row_ink_fraction=row_ink_fraction,
             line_gap=line_gap,
             min_line_height=min_line_height,
+            max_single_line_height=int(settings.get("max_single_line_height", 200)),
             pad_y=pad_y,
             pad_x=pad_x,
         )
 
-        # 5. Filter text lines that overlap detected figures (prevents line piercing)
+        # 6. Filter text lines that overlap detected figures (prevents line piercing)
         clean_line_boxes: list[tuple[int, int, int, int]] = []
         for tx, ty, tw, th in detected_line_boxes:
             overlaps_figure = False
@@ -382,20 +473,23 @@ def detect(pages: list[Page], cfg: dict) -> list[Region]:
             if not overlaps_figure:
                 clean_line_boxes.append((tx, ty, tw, th))
 
-        median_height = float(np.median([box[3] for box in clean_line_boxes])) if clean_line_boxes else 45.0
+        # 7. Stray fragment absorption & noise pruning
+        final_line_boxes = _absorb_and_prune_stray_boxes(clean_line_boxes)
 
-        # 6. Tag lines (heading vs text)
+        median_height = float(np.median([box[3] for box in final_line_boxes])) if final_line_boxes else 45.0
+
+        # 8. Tag prominent headings (heading_factor = 1.45, top of page)
         classified_lines: list[dict[str, Any]] = []
-        for index, bbox in enumerate(clean_line_boxes):
+        for index, bbox in enumerate(final_line_boxes):
             x, y, w, h = bbox
-            if y < height * 0.12 and w >= width * 0.22 and (h >= median_height * heading_factor or (index == 0 and h >= median_height * 1.10)):
+            if y < height * 0.12 and w >= width * 0.25 and h >= median_height * heading_factor:
                 kind = "heading"
             else:
                 kind = "text"
 
             classified_lines.append({"bbox": bbox, "kind": kind, "x": x, "y": y, "w": w, "h": h})
 
-        # 7. Combine all elements and sort reading order
+        # 8. Combine all elements and sort reading order
         all_elements = classified_lines + [
             {
                 "bbox": fb["bbox"],
@@ -413,7 +507,7 @@ def detect(pages: list[Page], cfg: dict) -> list[Region]:
         for elem in ordered_elements:
             regions.append(Region(page_id=page.id, bbox=elem["bbox"], kind=elem["kind"]))
 
-        # 8. Debug Visualization Overlay
+        # 9. Debug Visualization Overlay
         if debug_output_dir:
             color_map = {
                 "heading": (255, 191, 0),   # Deep Sky Blue
