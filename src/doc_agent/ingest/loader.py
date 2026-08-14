@@ -24,9 +24,18 @@ def load_pages(cfg: dict) -> list[Page]:
     pages: list[Page] = []
     for image_path in image_paths:
         relative_path = image_path.relative_to(raw_dir)
-        doc_id = relative_path.parent.as_posix().replace("/", "__")
-        if doc_id == ".":
-            doc_id = "default"
+        parent_doc_id = relative_path.parent.as_posix().replace("/", "__")
+        if parent_doc_id == ".":
+            # Flat corpora (no subfolder per book) still encode the document in
+            # the filename, e.g. "higher_math_page_0001.png" / "math_page_0001.png".
+            # Strip the trailing "_page_<n>" so pages from different books don't
+            # collapse into one doc_id (breaks document-level splits, C3).
+            import re
+
+            match = re.match(r"^(.*)_page_\d+$", image_path.stem)
+            doc_id = match.group(1) if match else "default"
+        else:
+            doc_id = parent_doc_id
         page_id = f"{doc_id}__{image_path.stem}"
         pages.append(
             Page(
