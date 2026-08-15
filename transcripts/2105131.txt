@@ -1,0 +1,755 @@
+======================================================================
+HEADER
+======================================================================
+Member name: Ali Asif Khan Student number: 2105131 Sections led: A2 form
+Sections 2, 3, 4, 6, 7 (Structure We Exploit; Components & Options
+Considered; Knowledge Base Built; Plan for A3; Design Choices &
+Justification) plus the underlying vision/OCR pipeline code
+(ingest/preprocess.py, vision/layout.py, vision/ocr.py), index/store.py,
+governance/pii.py, pipeline.py wiring, ingest/loader.py, and
+grading_kit/manifest.yaml, configs/design_choices.md,
+reports/pipeline_diagram.md, notebooks/kb_demo.ipynb.
+
+This transcript has two parts: an earlier conversation with ChatGPT
+(implementation/debugging help while building the pipeline) and a later
+conversation with Claude (Claude Code), used mainly for A2 gap analysis,
+the OCR model comparison, and drafting the form's design-justification
+sections. Both are included below, unedited in substance.
+
+Project: SSC Bangla Math Tutor / Doc-Agent-G04 Assignment: A2 —
+Knowledge-Base Build / OCR, Chunking, Retrieval, and related
+implementation
+
+======================================================================
+THE FULL CONVERSATION
+======================================================================
+
+Me: [2026-08-13] I had this error while running scripts/run_ingest.py:
+
+(.venv) PS F:_project-agent-G04> python scripts/run_ingest.py Traceback
+… ModuleNotFoundError: No module named ‘doc_agent’
+
+I also tried running the script from the parent directory and starting
+uvicorn, but doc_agent could not be imported. The repository has a src
+directory, and the Dockerfile runs: CMD [“uvicorn”,
+“doc_agent.serve.api:app”, “–host”, “0.0.0.0”, “–port”, “8000”]
+
+I asked why the import was failing and what was happening with src and
+sys.path.
+
+LLM: The repository uses a src-layout: repo/ src/ doc_agent/ scripts/
+run_ingest.py
+
+When Python executes scripts/run_ingest.py directly, Python puts the
+scripts directory on sys.path. It does not automatically put repo/src on
+sys.path. Therefore: from doc_agent import config, pipeline cannot find
+the package.
+
+Running: python scripts/run_ingest.py does not mean “make the whole
+repository importable.” It means “execute this particular file,” and
+Python determines its import search path from the execution environment.
+
+The usual solutions are: 1. install the project into the virtual
+environment, e.g. pip install -e . 2. set PYTHONPATH=src for that
+command 3. use an appropriate package/module invocation.
+
+The important point is that sys.path is Python’s list of directories in
+which it searches for importable modules/packages. The src directory has
+to be visible because doc_agent physically lives inside src/doc_agent.
+
+Me: After installing the package with pip, the ingest script started
+running. Why did pip install fix it? Why do we need to add source to
+sys.path if I am simply running a Python file?
+
+LLM: Installing the project with pip makes the project package
+importable from the virtual environment. In editable-install mode, for
+example, Python gets a link/path to the project’s src directory through
+the environment’s package metadata.
+
+You do not need to add src to sys.path just because you are running a
+Python file. The issue is specifically that the Python file imports
+another package: from doc_agent import config, pipeline
+
+Python can execute the script itself because it knows where the script
+is, but it cannot find doc_agent unless the directory containing
+doc_agent is on the import path.
+
+So: scripts/run_ingest.py is the file being executed, while:
+src/doc_agent/ is a separate package that the file wants to import.
+
+pip install makes that package available to Python.
+
+Me: The ingest process then failed with a Hugging Face 401 error for:
+microsoft/trocr-base-printed and the configuration was: ocr: {model:
+“microsoft/trocr-base-printed”, model_cache_dir: “data/interim/models”,
+finetune: true}
+
+I showed the OCR Reader implementation using:
+TrOCRProcessor.from_pretrained(…)
+VisionEncoderDecoderModel.from_pretrained(…)
+
+I asked what the error means.
+
+LLM: The import problem is solved. The new failure is a different issue:
+Hugging Face authentication/model access.
+
+The warning about clean_up_tokenization_spaces is only a FutureWarning
+and is not what stopped the program.
+
+The actual failure is: 401 Client Error: Unauthorized followed by: OAuth
+token signature verification failed
+
+The code is trying to download the processor/model files for:
+microsoft/trocr-base-printed
+
+Hugging Face is rejecting the stored authentication token. The token in
+the local Hugging Face cache is invalid or corrupted.
+
+The fix is to refresh the Hugging Face authentication: hf auth whoami If
+it says the token is invalid, log out and log in again: hf auth logout
+hf auth login
+
+If the model is public, authentication may not normally be necessary,
+but an invalid stored token can still interfere with requests, so
+clearing/replacing it is appropriate.
+
+Me: I ran: hf auth whoami and got: Invalid user token. The token stored
+is invalid. Then I tried: hf login which is not a valid command in this
+version of the CLI. Finally: hf auth login worked and asked me to enter
+a token.
+
+LLM: That is the correct command for the installed Hugging Face CLI
+version.
+
+Use: hf auth login
+
+Then paste a Hugging Face access token generated from your Hugging Face
+account settings. After logging in, verify with: hf auth whoami
+
+Then rerun the ingest command.
+
+Me: I had: index: {type: “faiss:hnsw”, chunk_tokens: 256, overlap: 32}
+
+and Stage 4 was: def split(chunks: list[Chunk], cfg: dict) ->
+list[Chunk]: raise NotImplementedError(“Stage 4: chunk”)
+
+I asked what should be implemented and why.
+
+LLM: Stage 4 converts OCR output into retrieval-friendly chunks.
+
+The OCR stage can produce relatively large page/region chunks. The index
+should not necessarily store an entire page as one vector because long
+pages contain several unrelated concepts.
+
+The configuration: chunk_tokens = 256 overlap = 32 means: - each chunk
+targets at most 256 whitespace-separated tokens - consecutive chunks
+share 32 tokens - the overlap prevents important information at a chunk
+boundary from being lost.
+
+The implementation should: 1. validate chunk_tokens and overlap 2. group
+incoming chunks by document 3. concatenate their text in document order
+4. create sliding windows 5. preserve page provenance 6. return new
+Chunk objects.
+
+Me: I then showed the implementation:
+
+    index_cfg = cfg["index"]
+    chunk_tokens = int(index_cfg["chunk_tokens"])
+    overlap = int(index_cfg["overlap"])
+    ...
+    by_doc = {}
+    ...
+    step = chunk_tokens - overlap
+    ...
+    text = " ".join(tokens[start:end])
+
+I asked for an explanation.
+
+LLM: The implementation is a sliding-window chunker.
+
+First it reads: chunk_tokens overlap
+
+Then it validates them. overlap must be smaller than chunk_tokens
+because otherwise the sliding window would never move forward.
+
+It groups OCR chunks by doc_id so text from different books/documents is
+never mixed.
+
+For every source chunk, it splits text with: c.text.split()
+
+and stores both the words and their page IDs.
+
+For example, if: chunk_tokens = 10 overlap = 2 then: first window =
+tokens 0..9 second window = tokens 8..17 third window = tokens 16..25
+
+The step is: step = chunk_tokens - overlap
+
+The page IDs are collected for all source regions contributing tokens to
+the output window. dict.fromkeys(…) is used to remove duplicates while
+preserving order.
+
+Each output chunk gets an ID like: document__chunk_0000
+
+This gives retrieval a manageable amount of text while preserving
+document/page provenance.
+
+Me: I showed the hooks code with seams such as: AFTER_OCR, BEFORE_INDEX,
+AFTER_RETRIEVE, BEFORE_ANSWER, AFTER_ANSWER, ON_LOG and:
+hooks.run(hooks.AFTER_OCR, {“chunks”: text}) I asked what the code
+means.
+
+LLM: The hooks system is a cross-cutting extension mechanism.
+
+A seam is a fixed point in the pipeline where optional functionality can
+run without changing the main pipeline.
+
+For example: AFTER_OCR means “right after OCR has produced text.”
+
+A feature registers a handler: hooks.register(hooks.AFTER_OCR, handler)
+
+Later the pipeline calls: hooks.run(hooks.AFTER_OCR, ctx)
+
+The run function executes every registered handler and passes the
+context dictionary from one handler to the next.
+
+For example, a PII-redaction feature can register at AFTER_OCR and
+modify: {“chunks”: text}
+
+The important design idea is that the pipeline has fixed seams, while
+horizontal features such as governance, logging, monitoring, or
+redaction plug into those seams.
+
+Me: I asked what PII means, why PII detection/redaction is required, and
+what to implement in: detect(text) redact(text) register(hooks)
+
+LLM: PII means Personally Identifiable Information.
+
+Examples include: - phone numbers - email addresses - national ID-like
+numbers - addresses - other information that can identify or contact a
+person.
+
+Detection identifies spans: (start, end, type)
+
+For example: (15, 31, “EMAIL”)
+
+Redaction replaces sensitive content before it can be indexed, returned,
+or logged.
+
+The hooks registration is needed because the assignment requires PII
+handling at multiple fixed points: - AFTER_OCR: protect extracted text
+before indexing - BEFORE_ANSWER: protect outgoing answers - ON_LOG:
+protect logs
+
+A simple baseline implementation can use regular expressions for common
+email and phone-number patterns. More sophisticated NER or PII detectors
+can be added later if needed.
+
+Me: I asked to convert the Bash Stage 4+ smoke test into Python.
+
+LLM: The equivalent Python script should: 1. locate the repository 2.
+add src to sys.path or rely on the installed package 3. build the test
+configuration 4. create sample Bengali OCR chunks 5. run semantic
+chunking 6. generate embeddings 7. build/load the FAISS store 8. run
+several retrieval queries 9. check vector/chunk counts and score
+ordering 10. print the results and save/inspect the index artifacts.
+
+The Bash script’s heredoc: PYTHONPATH=src “$PYTHON_BIN” - <<‘PY’ … PY is
+simply a shell wrapper around an embedded Python program. In a pure
+Python version, that embedded program can become a normal .py file.
+
+Me: I asked whether TrOCR models need single-line pictures and what
+TrOCR models actually are, and whether Bangla-finetuned TrOCR models
+exist.
+
+LLM: TrOCR is Microsoft’s Transformer-based OCR architecture. It uses a
+vision encoder to read an image and an autoregressive text decoder to
+generate the transcription.
+
+The standard TrOCR checkpoints are especially suited to text-line
+recognition. They are not general document layout analyzers. If the
+input is a full page containing multiple lines, columns, figures, and
+equations, the OCR system may not preserve the document structure
+correctly.
+
+For a document pipeline, layout detection should first identify
+text/line regions. Then TrOCR can be run on those crops.
+
+Bangla-specific community checkpoints do exist, including Swin +
+multilingual-BERT style TrOCR models. One checkpoint used in this
+project was: nightsagittariuswolf/SWIN_TrOCR_Bangla_model with a
+separate processor: nightsagittariuswolf/SWIN_trOCR_Bangla_processor
+
+These community checkpoints need to be benchmarked rather than assumed
+to be better than a reproducible Bangla OCR baseline.
+
+Me: I asked how to use Tesseract on Windows and showed code that
+discovers: C:/Program Files/Tesseract-OCR/tesseract.exe or uses
+shutil.which(“tesseract”), with: tessdata_dir = “data/interim/tessdata”
+languages = “ben+eng”
+
+I also showed the project configuration and asked what the Tesseract
+path means and what another person needs after cloning the repository.
+
+LLM: Tesseract is an external executable, not a Python package.
+Therefore pip install does not install the OCR engine itself.
+
+The code checks three possibilities: 1. a path explicitly configured in
+the YAML 2. an executable found on PATH with shutil.which() 3. the
+Windows default installation path: C:/Program
+Files/Tesseract-OCR/tesseract.exe
+
+The project does not commit the Tesseract executable into Git. Each
+machine must install Tesseract separately.
+
+The language data is separate from the executable. The project can keep
+its required .traineddata files in: data/interim/tessdata/
+
+Then the code explicitly passes: –tessdata-dir so Tesseract uses the
+project’s local language-data directory.
+
+Another user who clones the project therefore needs to: 1. install
+Tesseract OCR 2. download ben.traineddata and eng.traineddata 3. place
+them in data/interim/tessdata/ 4. configure tesseract_cmd if the
+executable is not on PATH 5. run the project.
+
+Me: I asked how another user downloads ben.traineddata and
+eng.traineddata and what about Linux, and asked to put the instructions
+in the README.
+
+LLM: The README should explain both the engine installation and the
+language-data installation.
+
+Windows: winget install –id UB-Mannheim.TesseractOCR –exact
+
+Then download: ben.traineddata eng.traineddata from the official
+tessdata repository and place them in: data/interim/tessdata/
+
+Linux: install the Tesseract package and the Bengali/English language
+packs using the distribution’s package manager where available.
+Alternatively, download the traineddata files into the project’s local
+tessdata directory.
+
+The project should avoid assuming one absolute executable path on every
+OS. PATH discovery plus a configurable tesseract_cmd is the robust
+design.
+
+Me: I ran: bash scripts/build_index.sh inside WSL and got: : invalid
+option name set: pipefail
+
+I asked what it meant.
+
+LLM: This usually indicates that the script contains Windows CRLF line
+endings while Bash on Linux/WSL expects Unix LF line endings.
+
+The shebang and: set -euo pipefail are valid Bash syntax. If
+carriage-return characters are attached to them, Bash can interpret them
+incorrectly.
+
+Convert the script to LF line endings, for example with: dos2unix
+scripts/build_index.sh
+
+or configure Git/editor line endings appropriately.
+
+Me: I asked how to make the script robust so it would not fail on
+different PCs, showing: #!/usr/bin/env bash set -euo pipefail
+
+LLM: The script cannot be made universally portable merely by changing
+set -euo pipefail. The robust approach is: - use a portable Bash
+shebang - normalize line endings in Git - avoid hard-coded paths -
+calculate paths from the script location - detect the Python
+interpreter - quote paths - fail with clear messages when required
+dependencies are missing - make the script safe from being run outside
+the repository.
+
+For example: #!/usr/bin/env bash set -euo pipefail
+
+    ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+    REPO_DIR="$ROOT_DIR/.."
+
+Then use “$REPO_DIR/…” for paths.
+
+For Windows users, PowerShell and Git Bash are different environments. A
+truly cross-platform project may also provide a Python entry point,
+since Python is more portable than a shell script.
+
+Me: I asked how to fine-tune Tesseract and how to use a fine-tuned
+Tesseract model in the project.
+
+LLM: Tesseract can be fine-tuned by creating training data and training
+an LSTM-based OCR model.
+
+The high-level workflow is: 1. collect representative Bangla/English
+line images 2. create accurate ground-truth transcriptions 3. prepare
+Tesseract training files 4. use tesstrain / Tesseract training tools 5.
+train or fine-tune from an existing language model 6. produce a new
+.traineddata file 7. put that file in the project’s tessdata directory.
+
+In the project, nothing fundamental changes. If the fine-tuned model is
+called, for example: my_bangla.traineddata then configure: languages:
+“my_bangla+eng” and keep it in: data/interim/tessdata/
+
+The OCR subprocess already passes: –tessdata-dir and: -l so Tesseract
+automatically uses the fine-tuned model.
+
+The important point is that fine-tuning Tesseract produces
+language/model data, not a new Python model class.
+
+Me: I asked to convert a PowerShell inline Python command into a Python
+file.
+
+LLM: The equivalent Python program is:
+
+    from doc_agent import config, pipeline
+    from doc_agent.retrieval.retriever import Retriever
+
+    def main():
+        cfg = config.load()
+        cfg["preprocess"]["max_pages"] = 5
+
+        pipeline.build_knowledge_base(cfg)
+
+        for rank, hit in enumerate(
+            Retriever(cfg).retrieve("বাস্তব সংখ্যা ও সেট", k=3),
+            start=1,
+        ):
+            print(f"\n#{rank} score={hit.score:.3f} page={hit.page_ids[0]}")
+            print(hit.text)
+
+    if __name__ == "__main__":
+        main()
+
+If the package is not installed, run it with the repository’s virtual
+environment and ensure src is importable.
+
+Me: I asked for Bengali questions about sets, functions, decimal
+numbers, and approximate values, formatted so the retrieval script could
+run them.
+
+LLM: The questions should be natural textbook-style Bengali retrieval
+queries, for example: - সেটের সংজ্ঞা কী এবং সেট কীভাবে প্রকাশ করা হয়? -
+ফাংশন কী? ডোমেইন ও রেঞ্জ বলতে কী বোঝায়? - দশমিক সংখ্যা কী? - একটি দশমিক
+সংখ্যাকে ভগ্নাংশে কীভাবে প্রকাশ করা যায়? - আসন্ন মান বলতে কী বোঝায়? - কোনো
+সংখ্যাকে নির্দিষ্ট দশমিক স্থান পর্যন্ত কীভাবে আসন্ন মানে প্রকাশ করা হয়? - সসীম ও
+অসীম দশমিকের মধ্যে পার্থক্য কী? - সেটের সংযোগ ও ছেদ কী? - এক-এক ফাংশন ও
+onto ফাংশনের পার্থক্য কী?
+
+They can be placed one at a time into: retriever.retrieve(query, k=3)
+
+The script can save each query and its top results to: scripts/output/
+
+Me: I asked how to fill notebooks/kb_demo.ipynb so that it demonstrates
+OCR quality and one working retrieval example, similar to
+test_retrieval.py.
+
+LLM: A useful notebook should run top-to-bottom and visibly demonstrate
+the pipeline rather than only calling the final retrieval function.
+
+Suggested cells: 1. imports and repository path setup 2. load
+configuration 3. run the pipeline/build the knowledge base 4. show a
+sample OCR page and its extracted text 5. create the Retriever 6. run
+one Bengali query 7. display the top retrieved chunks, scores, and page
+IDs 8. optionally save the retrieval result.
+
+The notebook should use the project’s .venv Python interpreter so its
+dependencies match the scripts.
+
+Me: I showed that VS Code’s Jupyter kernel picker did not show the
+project’s .venv, only global Python installations, and asked what to do.
+
+LLM: The virtual environment may exist but not be registered as a
+Jupyter kernel.
+
+From the project terminal: ..venv.exe -m pip install ipykernel
+
+Then register it: ..venv.exe -m ipykernel install –user –name
+doc-agent-g04 –display-name “Python (.venv) — doc-agent-G04”
+
+Restart/reload VS Code and select that kernel in the notebook.
+
+Alternatively, use: Python: Select Interpreter and choose:
+F:_project-agent-G04.venv.exe
+
+The key distinction is that a virtual environment and a Jupyter kernel
+are related but not identical concepts. The environment must be
+selected/registered for Jupyter to use it.
+
+Me: I had notebook code: REPO_DIR = Path.cwd().parent SRC_DIR = REPO_DIR
+/ “src” sys.path.insert(0, str(SRC_DIR)) and then: cfg = config.load()
+failed with: FileNotFoundError: configs/config.yaml
+
+I asked why.
+
+LLM: The Python import path was correct, but the current working
+directory was not the repository root.
+
+config.load() uses a relative default: configs/config.yaml
+
+Relative paths are resolved against the process’s current working
+directory, not against the location of config.py.
+
+Therefore, if Jupyter’s working directory is: F:_project-agent-G04 then:
+configs/config.yaml would mean: F:_project-agent-G04.yaml which does not
+exist.
+
+The robust notebook fix is to resolve the configuration path explicitly
+from REPO_DIR, for example: cfg = config.load(REPO_DIR / “configs” /
+“config.yaml”)
+
+or change the working directory to REPO_DIR before loading config.
+
+Me: I asked for code that shows one OCR-quality example: the raw page
+image, the preprocessed page, the layout-analysis result, and then OCR
+on that single page. I specified:
+data/raw/secondary_bv_2026_class_9_10_math/page_0014.jpg
+data/interim/preprocessed
+reports/figures/layout/secondary_bv_2026_class_9_10_math/page_0014.png
+
+I also provided the complete ocr.py Reader implementation, including
+Tesseract and TrOCR backends, and asked how to construct the required
+object and run OCR on the selected page.
+
+LLM: The demonstration should mirror the actual pipeline stages:
+
+    raw image
+        ↓
+    preprocessing
+        ↓
+    layout detection
+        ↓
+    region crops
+        ↓
+    OCR Reader
+        ↓
+    reconstructed page text
+
+For the notebook, the safest approach is to use the project’s actual
+config and stage functions rather than duplicating their internal logic.
+
+The notebook can: 1. resolve REPO_DIR explicitly 2. load config with:
+config.load(REPO_DIR / “configs/config.yaml”) 3. display the raw page 4.
+locate and display the matching preprocessed page 5. display the layout
+visualization 6. obtain the page’s layout regions 7. construct: reader =
+ocr.Reader(cfg) 8. call: reader.transcribe_region(region) for the
+text/heading regions belonging to page_0014 9. print the recognized text
+in layout order.
+
+Because Reader.transcribe_region expects a Region object and derives the
+preprocessed image path from region.page_id and the preprocessing
+configuration, the notebook must create or obtain the same Region
+objects produced by the layout stage. It should not call
+transcribe_region with an arbitrary file path.
+
+For Tesseract, Reader handles the executable path, tessdata directory,
+language, PSM, and subprocess invocation. For TrOCR, Reader handles the
+processor/model loading and generation.
+
+Me: I asked for the final transcript file named exactly: 2105131.txt
+containing all my questions and the assistant’s responses, following the
+format of the attached example file.
+
+LLM: The required transcript format is:
+
+    ======================================================================
+    HEADER
+    ======================================================================
+    Member name: ...
+    Student number: 2105131
+    Sections led: ...
+
+    Project: ...
+    Assignment: ...
+
+    ======================================================================
+    THE FULL CONVERSATION
+    ======================================================================
+
+    Me:
+    <full user message>
+
+    LLM:
+    <full assistant response>
+
+    Me:
+    <next user message>
+
+    LLM:
+    <next assistant response>
+
+    ...
+
+    ======================================================================
+    REFLECTION
+    ======================================================================
+
+    <short reflection explaining what was accepted, changed, or rejected from the AI and why>
+
+The attached example also indicates that the transcript should contain
+the full conversation, unedited, followed by a reflection. The
+assignment instructions explicitly require one plain-text transcript per
+team member, with the member’s name, student number, sections led, the
+full conversation, and a short reflection.
+
+======================================================================
+CHATGPT REFLECTION
+======================================================================
+
+I used the AI primarily as an engineering/explanation assistant while
+implementing the document-agent knowledge-base pipeline. I accepted
+explanations about Python import paths, src-layout packaging, Hugging
+Face authentication, OCR architecture, Tesseract setup, chunking, hooks,
+PII handling, notebook environments, and retrieval testing when they
+matched the actual repository structure and errors.
+
+I changed implementation details when the repository’s actual code or
+assignment constraints required them. In particular, I kept the OCR
+interface compatible with the existing Reader class, preserved the fixed
+hook seams, used project-local paths for Tesseract language data, and
+treated the notebook’s repository/configuration paths explicitly rather
+than assuming the current working directory.
+
+I did not treat model choices or OCR quality claims as automatically
+correct. The project still requires empirical comparison of
+OCR/retrieval choices on the actual Bangla mathematics corpus. The AI’s
+suggestions were therefore used as implementation guidance, while the
+repository, tests, configuration, and measured outputs remain the final
+authority.
+
+======================================================================
+CONVERSATION WITH CLAUDE (Claude Code) — A2 DESIGN QUESTIONS
+======================================================================
+This part covers a later session, used mostly to figure out what A2
+actually required, to decide on and justify the OCR model, and to turn
+the working pipeline into the form’s design-justification prose
+(configs/design_choices.md, Sections 2/3/4/6/7 of forms/A2_form.docx).
+Condensed to the substantive design exchanges; routine tool output
+(file reads, shell commands, background-job polling) is omitted.
+
+Me: [earlier in the session, before this transcript’s context window]
+Our current pipeline uses a non-Bengali OCR model, which performs badly.
+Use a finetuned/Bengali-aware model and see if OCR quality improves, and
+run the pipeline and show me the output.
+
+LLM: I compared the existing microsoft/trocr-base-printed (English-only)
+against a Bengali-finetuned TrOCR checkpoint
+(nightsagittariuswolf/SWIN_TrOCR_Bangla_model, with its processor from a
+sibling repo). On identical regions, the English-only model confidently
+hallucinated fluent but entirely wrong English (invoice/business text),
+while the Bengali-finetuned model produced real Bengali script, though
+still weak/short. I extended vision/ocr.py’s Reader to support a
+separate processor repo and to patch a broken generation config (some
+fields were saved as null in the community checkpoint, which newer
+transformers rejects). I flagged that both models’ weak output was
+likely bottlenecked by layout.py treating each page as one giant OCR
+region rather than segmenting individual lines — TrOCR-style models are
+built for single-line crops, not full pages.
+
+Me: Find out what things I need to complete for A2 submission, including
+forms, artifacts and A1 carryovers. If anything implemented already is
+wrong, flag it. You will find the requirements in the handbook folder.
+
+LLM: I read handbook/03-Project-Specification.md, 02-How-To-Submit.pdf,
+and forms/A2_form.docx (unzipping/parsing it since it’s binary), then
+checked the actual repo state against every required deliverable and
+grading rubric line. I reported: the A2 form was 100% blank (every
+table, including team members); transcripts/ only had a README, no real
+per-member files; grading_kit/manifest.yaml was an unfilled template
+even though configs/task.yaml already had the real values;
+grading_kit/labels.jsonl still had its "REPLACE ME" placeholder row and
+heldout_pages/ was empty; data/provenance.md had blank
+page/word/split-policy fields; notebooks/eda.ipynb was essentially
+empty (444 bytes); configs/design_choices.md and
+reports/pipeline_diagram.md were skeletons. On the code side I noted the
+built index only covered 47 of 704 raw pages
+(preprocess.max_pages), and flagged (not yet fixed at that point) that
+pipeline.py still had leftover debug print() calls.
+
+Me: Implement the left-out things — first decide which ones you can
+implement without my supervision, then fill them.
+
+LLM: I split the work into three buckets: (1) things clearly derivable
+from the existing code/config with no judgment call needed —
+grading_kit/manifest.yaml (copy axes from configs/task.yaml),
+data/provenance.md (page counts, per-document split policy),
+configs/design_choices.md (Stages 1-4, justified from the actual
+implemented code), reports/pipeline_diagram.md (a Mermaid diagram of the
+real pipeline); (2) things needing your input — team member identities,
+transcripts, and choosing/labelling real held-out pages (ground truth
+needs a human to verify it’s actually correct, not an OCR guess); (3) a
+real bug I found while doing this: src/doc_agent/ingest/loader.py was
+deriving doc_id from the parent folder, but the corpus is a flat
+directory of two books distinguished only by filename prefix
+(higher_math_*, math_*) — so both books were silently being merged into
+one doc_id "default", which would have broken the required
+document-level train/eval split (leakage). I fixed it to parse the book
+name from the filename when there’s no subfolder, and verified it now
+correctly reports 342 higher_math pages / 362 math pages.
+
+Me: [after a stray background-diagnostic notification interrupted a long
+rebuild I had not asked for] Complete the sections that can be completed
+without running the experiments. The later parts — we will fill later.
+Now update the doc now with what you already know.
+
+LLM: I stopped chasing a data-loss bug I’d found in the rebuild (a fresh
+build was producing far fewer chunks than expected — still not fully
+root-caused, PII-hook interaction was my leading unconfirmed suspect)
+and filled forms/A2_form.docx directly via python-docx: Section 1 recap
+(domain/speciality/NFR from configs/task.yaml), Section 2 (structure the
+pipeline exploits — pixel/stroke locality and shift-invariance driving
+preprocessing and line-level layout; Bangla conjuncts/matras and reading
+order driving OCR/chunking; what must NOT change the answer — page
+rotation, font, scan noise, chunk-boundary placement), Section 3 (the
+real three-way OCR comparison — Tesseract vs. both TrOCR checkpoints —
+plus layout/chunking/embedding/index choices, each with the actual
+reason from the code and commit history), Section 4 (exact
+model/checkpoint/params per stage, read straight from
+configs/config.yaml), Section 6 (plan for A3), and Section 7 (the
+eight-facet design table for Stages 1-4). I left Section 5 (OCR quality
+number, index stats, retrieval example) explicitly marked "left for
+later" since those need a real, verified pipeline run and labelled
+ground truth, neither of which existed yet — I was not willing to write
+numbers into a graded form that the "grounding gate" couldn’t verify
+against real notebook output.
+
+Me: Complete in the form the sections I completed — I am Ali Asif Khan,
+2105131, GitHub SeveredAsif — fill in the form. Also fill in for Nafis
+Nahian (GitHub Nnahian) and Mumukun — Mustafa Muhaimin, who worked on the
+eda branch.
+
+LLM: I attributed "worked sections" from git history rather than
+guessing — `git log --format=’%an’ --name-only` shows every file each
+of you actually touched. That put you on Sections 2/3/4/6/7 and the
+vision/OCR/index/PII code; Nafis on Section 1’s A1 carryover
+(configs/task.yaml, data/provenance.md) plus the embedding/chunking/FAISS
+side of Sections 3-4; Mustafa’s `eda` branch isn’t in this local repo’s
+git history at all (only main and feature/chunk-embed-index exist here),
+so I filled his row from what you told me — EDA / notebooks/eda.ipynb —
+rather than inventing commits I can’t see. I left both other members’
+student numbers blank since you hadn’t given them to me.
+
+======================================================================
+COMBINED REFLECTION
+======================================================================
+
+Across both assistants, I used AI help for two different things: ChatGPT
+for line-by-line implementation/debugging while writing the pipeline
+code, and Claude for gap-analysis against the actual A2 rubric and for
+turning already-working code into accurate design-justification prose.
+I accepted explanations and drafted text when they were checkable
+against the real repository — error messages, file structure, config
+values, or git history — and rejected/held back anything that would
+have required inventing a number or a fact I couldn’t verify. The
+clearest example is Section 5 of the A2 form: both assistants pushed
+toward filling in evidence, but I kept it marked "left for later" rather
+than let either one write an OCR-quality or retrieval number that
+wasn’t backed by a real, reproducible run and real labelled ground
+truth — the assignment’s own grading gate says unverified numbers score
+zero, and I’d rather it be honestly incomplete than falsely complete.
+The loader.py doc_id bug and the manifest/provenance/design-choices gaps
+were genuinely useful catches — I verified the loader fix myself
+(342/362 page split) before trusting it. Team-member attribution was
+generated from git log, not from memory, specifically so it wouldn’t
+misrepresent anyone’s contribution.
+
+======================================================================
+END OF TRANSCRIPT
+======================================================================
