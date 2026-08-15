@@ -2,21 +2,30 @@
 from __future__ import annotations
 
 import hashlib
+from typing import Any
 
 import numpy as np
 
-from ..contracts import *  # noqa
+from ..contracts import Chunk
 
 
 class Encoder:
-    """Small wrapper around the configured embedding model."""
+    """Small wrapper around the configured embedding model.
+
+    The default is a lightweight SentenceTransformer. Hash embeddings remain
+    available only when explicitly requested for offline unit tests.
+    """
+
+    _loaded_models: dict[tuple[str, str], Any] = {}
 
     def __init__(self, cfg: dict) -> None:
         embed_cfg = cfg.get("embed", {})
-        self.model_name = embed_cfg.get("model", "local:hashing")
+        self.model_name = embed_cfg.get(
+            "model", "sentence-transformers/all-MiniLM-L6-v2"
+        )
         self.dim = int(embed_cfg.get("dim", 384))
         self.batch_size = int(embed_cfg.get("batch_size", 32))
-        self.allow_hash_fallback = bool(embed_cfg.get("allow_hash_fallback", True))
+        self.allow_hash_fallback = bool(embed_cfg.get("allow_hash_fallback", False))
         self._model = None
 
         if not self.model_name.startswith("local:"):
@@ -24,16 +33,24 @@ class Encoder:
                 from sentence_transformers import SentenceTransformer
 
                 device = cfg.get("device", "cpu")
-                self._model = SentenceTransformer(self.model_name, device=device)
+                cache_key = (self.model_name, device)
+                self._model = self._loaded_models.get(cache_key)
+                if self._model is None:
+                    self._model = SentenceTransformer(self.model_name, device=device)
+                    self._loaded_models[cache_key] = self._model
                 self.dim = int(self._model.get_sentence_embedding_dimension())
             except Exception as exc:
                 if not self.allow_hash_fallback:
                     raise RuntimeError(
                         f"Could not load embedding model {self.model_name!r}. "
-                        "Set embed.allow_hash_fallback=true for offline smoke tests."
+                        "Install project dependencies with `uv sync` (or "
+                        "`python -m pip install sentence-transformers`) and ensure "
+                        "the model can be downloaded once. Set "
+                        "embed.allow_hash_fallback=true only for offline smoke tests."
                     ) from exc
                 self.model_name = f"local:hashing-fallback:{self.model_name}"
 
+    # Fallback Hashing (For onffline testing only)
     def encode_texts(self, texts: list[str]) -> np.ndarray:
         if not texts:
             return np.zeros((0, self.dim), dtype=np.float32)
