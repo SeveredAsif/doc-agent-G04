@@ -1,0 +1,531 @@
+HEADER
+======
+
+Member name: Nafis Nahian
+Student number: 2105007
+Sections led: A2 knowledge-base pipeline from chunking onward, semantic chunking bonus, embedding model setup, vector-store/retrieval testing, build-index local setup, and progress/transcript documentation.
+
+
+THE FULL CONVERSATION
+=====================
+
+Note: As we had to do agentic coding, this transcript records the AI-assisted development work for the A2 knowledge-base section. It preserves the actual sequence of prompts and implementation decisions from the working session. Long terminal outputs and repeated progress logs are summarized only where they were tool execution details rather than substantive design discussion.
+
+
+Conversation 1: Understanding the A2 Assignment and Planning the Knowledge Base
+-------------------------------------------------------------------------------
+
+Student:
+I am doing a document agent RAG project for my graded course at my university. The whole code stub for our agentic-RAG project is given to us in doc-agent-G04 and our teacher expects us to use agentic coding to do our project in this codebase.
+
+But I have considerable experience in coding and to ensure maximum grade, I want some control in my hand. Now it is time for the A2 part of the assignment. We need to build the knowledge base for this part. The whole pipeline is:
+
+ingest (load the pages) -> enhance (clean up damaged images, if your profile needs it) -> layout (find where the text sits on the page) -> OCR (read the text off the image) -> chunk (split into small pieces) -> embed (turn each piece into meaning-numbers) -> index (store them for fast search).
+
+Still the entire details are in doc-agent-G04/handbook/04-Project-Walkthrough.pdf and any detail you might need is in the codebase folder as the project is supposed to be a vibe coding one. So first analyze the entire codebase. You can also check our target pages in data/raw. To get a sense of our concrete plan, check A1_form.docx; it contains our design decisions and project proposal.
+
+NOTE: For now focus only on A2 part of the assignment and completing its deliverables. Finally put the step-by-step plan in A2-step-by-step-plan.md.
+
+AI:
+I inspected the codebase structure, the handbook guidance, the data directory, and the A1 proposal context. I treated A2 as a staged knowledge-base build rather than a generic RAG rewrite. I prepared a practical plan covering data preparation, ingestion, preprocessing/enhancement, layout, OCR, chunking, embedding, indexing, validation, and deliverables. I saved the result in A2-step-by-step-plan.md so that the team had an implementation map instead of only a high-level idea.
+
+
+Conversation 2: Narrowing Scope to Stage 4 Onward
+-------------------------------------------------
+
+Student:
+I went through the step-by-step plan. For the data part we need a team meeting, so let us avoid completing that for now. We also do not need modifications to ingestion or preprocessing as that is being handled by another teammate. Let us focus on stage 4 and onwards: chunking, embedding and vector store. Remember we will be doing semantic chunking as our bonus task.
+
+Let us write modular code to complete those stages, and devise a plan on how we can test those codes by hand using our limited 200-page data for now. I will be running and testing the codes by hand and matching the criteria which you are going to provide. Then we will proceed to the next tasks.
+
+NOTE:
+1. Use doc-agent-G04/handbook/05-Codebase-Guide.md for easier codebase navigation.
+2. If you are going to make assumptions in order to complete the task, mention them clearly.
+3. The code should not be too bloated. Keep it clean and readable with small comments.
+4. If you have any significant confusion, ask me for clarification.
+
+AI:
+I read the codebase guide and focused only on Stage 4 onward. I implemented the chunking, embedding, and vector-store pieces in the existing repo style rather than adding a large new framework. I kept the changes modular:
+
+- chunk.py handled chunk construction.
+- embed.py handled vector encoding.
+- store.py continued to own persistence.
+- retrieval code stayed responsible for querying.
+
+I also wrote a hand-test plan so the student could verify behavior manually on the limited page subset. I documented assumptions clearly, especially that OCR output would already be available from the earlier stages and that semantic chunking should initially use a lightweight embedding model rather than a large production model.
+
+
+Conversation 3: Smoke Testing Chunking, Embedding, Retrieval, and Storage
+-------------------------------------------------------------------------
+
+Student:
+In the parent directory under DL, help me run a bash script in smoke_test.sh with demo synthesized examples and verbose output so that I myself can verify that the chunking, embedding, retrieval, and storing code is working properly.
+
+Then I can hand it off to my teammates for further work.
+
+AI:
+I inspected the smoke test script and the project entry points, then ran the test with synthesized examples. The test exercised chunking, embedding, vector storage, and retrieval without relying on the full OCR/data pipeline. I reported the important output back to the student, including the number of chunks, vector dimensions, stored index artifacts, and the top retrieval results. This gave the team a controlled sanity check before connecting the stages to real OCR output.
+
+
+Conversation 4: Mapping A2 Requirements Section by Section
+----------------------------------------------------------
+
+Student:
+Great, everything works. Now go through the project guide 04-Project-Walkthrough.md and specifically all the 8 sections dedicated to A2. Try and answer all the questions, deliverables, and todos for those sections. Mark which ones are done and which need to be completed. Then put all those under the heading "section wise progress checklist" in A2-step-by-step-plan.md.
+
+AI:
+I read the A2 walkthrough sections and converted the requirements into a section-wise progress checklist. I marked the parts already implemented, partially done, or still pending. The checklist highlighted open work such as final data decisions, full-corpus OCR completion, retrieval evidence, and reporting material. I inserted the checklist under the requested heading in A2-step-by-step-plan.md so the plan could double as a grading tracker.
+
+
+Conversation 5: Dataset Download Script from Google Drive Folder
+----------------------------------------------------------------
+
+Student:
+Great, now let us write the bash script doc-agent-G04/scripts/get_data.sh. Just download data from the Google Drive folder link and put them in /data/raw.
+
+First make sure that the directory is empty. Also add a simple progress bar as 704 images are being downloaded. Keep the script simple and clean.
+
+AI:
+I created a get_data.sh workflow intended to empty data/raw and download the Google Drive folder contents into it. Because the first version depended on Drive folder download behavior, I included progress reporting and checks for expected image counts.
+
+Student:
+Write it using bash without adding any more Python dependencies.
+
+AI:
+I revised the data script to avoid new Python dependencies and attempted a Bash-only approach using standard command-line tools.
+
+Student:
+Okay, it does not work. I have changed the code back to Python and also added and installed gdown as a dependency. Now ensure that the script runs. Do not worry about the existing data in raw folder.
+
+AI:
+I adjusted the script around gdown and tested it against the current local setup. I treated gdown as an accepted dependency because the student explicitly installed and approved it for the dataset-fetching task.
+
+Student:
+I was getting rate limits as we had to download all 704 files. Now I have uploaded a zip to Drive instead:
+https://drive.google.com/file/d/13MHQMp08MfCwuV16SLtdB6KWcBBFrUZy/view?usp=drive_link
+
+NOW in the script: first empty data/raw, download this zip, extract into data/raw, ensure all 704 images exist, and delete the zip.
+
+AI:
+I rewrote get_data.sh to use the new zip-file workflow: clean data/raw, download the zip from Drive using gdown, extract it, validate that 704 image files exist, and remove the zip artifact afterward. This reduced rate-limit risk compared with downloading 704 individual files.
+
+Student:
+Okay, an extra ocr_images directory is getting added. Move all images from there to under data/raw exactly. Finally delete that redundant directory.
+
+AI:
+I updated get_data.sh so that if extraction creates an ocr_images directory, the script moves the image files directly into data/raw and deletes the redundant directory. This produced the intended flat data/raw layout with 704 images.
+
+
+Conversation 6: Summarizing Team Progress After Pulling Teammate Changes
+-------------------------------------------------------------------------
+
+Student:
+My teammates have done their part and pushed the changes. I have pulled them. Now give me a brief summary of the codebase and the progress till now and modify progress-checklist.md according to what has been done. ALSO highlight using bold and capital letters what needs to be done.
+
+AI:
+I inspected the updated codebase and progress files after the teammate changes. I summarized the current state:
+
+- Ingestion and preprocessing had teammate work in place.
+- Data/raw contained the intended image dataset.
+- Stage 4 onward had the chunking, embedding, retrieval, and vector-store skeleton/implementation path.
+- Remaining risks included running the real OCR-to-index pipeline, collecting retrieval evidence, validating output artifacts, and cleaning deliverables.
+
+I updated progress-checklist.md and emphasized remaining work with bold uppercase markers so the team could quickly see what still needed attention before submission.
+
+
+Conversation 7: Real OCR-to-Embedding-to-Retrieval Test with MiniLM
+-------------------------------------------------------------------
+
+Student:
+Now that we have our OCR pipeline in place, help me set up a proper embedder model, lightweight something like all-MiniLM, and create embeddings. For testing we will not create any files in the codebase doc-agent-G04 as we will submit it, so let us keep it clean. Use test-embedding-and-retrieval.py for the full pipeline.
+
+First modify the current code to use all-MiniLM embedder model by default and mention to install it if not installed. Also now as we have the embedding model, we are to implement the semantic chunking properly using the similarity of the sentences.
+
+Then after making those modifications in the codebase, in test-embedding-and-retrieval.py first run OCR on 1-2 pages, then take the output -> chunk them -> create embeddings -> store -> finally retrieve them so that it confirms real retrieval evidence from the actual corpus which we can use in the future to complete our tasks.
+
+If you still have any confusion, ask me for clarification. Also if you make assumptions to complete the tasks clearly mention them.
+
+AI:
+I modified the project so that the default embedding model became sentence-transformers/all-MiniLM-L6-v2 with 384-dimensional vectors. I updated the embedding layer to load SentenceTransformer and to give a clear install message if the dependency was missing. I kept the hash-based encoder only as an explicit fallback/testing path rather than the default.
+
+I implemented semantic chunking properly by splitting OCR text into sentences, embedding adjacent sentences, and starting a new chunk when semantic similarity dropped below the configured threshold or when size limits were reached. I also preserved hard boundaries for textbook-style markers such as chapters and examples.
+
+I updated the external test-embedding-and-retrieval.py script so it did not create test files inside the submission repo. The test ran the actual pipeline over 1-2 real pages:
+
+- preprocess pages
+- detect layout regions
+- run OCR
+- chunk OCR text semantically
+- encode chunks with MiniLM
+- build a FAISS vector store
+- retrieve evidence using realistic queries from the corpus
+
+Important assumption stated: all-MiniLM is an acceptable lightweight baseline, but because the corpus contains Bangla mathematical text, a multilingual or Bangla-specialized embedding model may later perform better.
+
+
+Conversation 8: Testing the Current build_index Script
+------------------------------------------------------
+
+Student:
+Test if the current build_index script runs with the changed code.
+
+AI:
+I ran the existing build_index.sh script and found that it did not reach the changed Stage 4 code at first. The initial issue was:
+
+ModuleNotFoundError: No module named 'doc_agent'
+
+The cause was that the script invoked scripts/run_index.py without installing the local package or setting PYTHONPATH=src. I also noticed that an earlier version of build_index.sh contained stray bare Python statements at the end, which would have caused a Bash failure even after the import problem was fixed.
+
+I reported that the changed chunking and embedding code had not yet been reached by the build entry point, and that the environment/build invocation needed repair before a full run could succeed.
+
+
+Conversation 9: Installing Local Dependencies and Making build_index Runnable
+-----------------------------------------------------------------------------
+
+Student:
+Install necessary modules in the current venv to ensure that my local setup can run the build_index script.
+
+AI:
+I inspected pyproject.toml, uv.lock, scripts/build_index.sh, and the current .venv. The first check showed that the virtualenv did not expose pip, so I used uv because the project already uses uv.lock.
+
+The first uv sync attempt failed because uv tried to use a read-only home cache:
+
+Could not create temporary file at /home/nn/.cache/uv
+
+I fixed that by setting UV_CACHE_DIR=/tmp/uv-cache and syncing again. The runtime packages were present, including:
+
+- torch
+- sentence-transformers
+- faiss-cpu
+- opencv-python
+- gdown
+- pyyaml
+- numpy
+
+The remaining blocker was that doc_agent itself was not importable from scripts/run_index.py. I installed the local package into the current venv as an editable package:
+
+UV_CACHE_DIR=/tmp/uv-cache uv pip install --python .venv/bin/python -e .
+
+Network access was required for uv to resolve package metadata, so I reran that step with approval. After installation, doc-agent appeared in the venv package list as an editable local package.
+
+I also restored pip into the venv with:
+
+.venv/bin/python -m ensurepip --upgrade
+
+Then I updated build_index.sh so that it uses .venv/bin/python automatically when available, instead of accidentally using the system Python. I also set HF_HOME to a writable project-local cache under data/interim/huggingface and enabled unbuffered Python output so progress messages appear during long OCR runs.
+
+Finally, I checked CUDA availability:
+
+torch.cuda.is_available() == False
+
+Because the config requested cuda, I changed configs/config.yaml to use:
+
+device: cpu
+
+This makes the local build runnable on the current machine with the lightweight MiniLM model.
+
+Verification performed:
+
+- build_index.sh passed Bash syntax check.
+- scripts/run_index.py and touched Python modules passed Python compile check.
+- doc_agent, cv2, faiss, sentence_transformers, torch, yaml, and numpy imported successfully.
+- MiniLM downloaded and loaded successfully.
+- MiniLM then loaded again in offline mode from the local HF cache.
+- bash scripts/build_index.sh started successfully using the venv and reached page loading/preprocessing/layout before the capped test run was intentionally stopped to avoid waiting for the full OCR workload.
+
+
+Conversation 10: Creating a Full Codebase Study Guide for Supervisor Review
+-----------------------------------------------------------------------------
+
+Student:
+We are done with all the coding. Now help me get a good grasp of all the code
+that has been done till now in the codebase doc-agent-G04, the complete
+workflow of this agentic RAG file by file and the data flow also. I must
+understand the codebase, its structure, what each file and code block does,
+their significance in detail. Maintain an order so that I can navigate and
+understand the project easily. Finally put everything in detail and in easier
+words in codebase-full-guide.md. Going through this thoroughly should help me
+prepare for any question my supervisor asks regarding this project.
+
+AI:
+I inspected the repository structure, configuration files, pipeline, stage
+modules, tests, reports, and generated index artifacts. I treated the task as a
+supervisor-facing study guide rather than a short summary. The guide was written
+in an ordered path matching the actual RAG data flow:
+
+raw scanned pages -> Page objects -> preprocessed images -> line Regions -> OCR
+text -> semantic Chunks -> embedding vectors -> FAISS index -> retrieval -> agent
+loop design.
+
+I explained the implemented parts honestly:
+
+- ingestion from data/raw,
+- OpenCV preprocessing,
+- projection-profile line layout detection,
+- Tesseract Bangla/English OCR,
+- semantic textbook-aware chunking,
+- SentenceTransformer embeddings,
+- FAISS IndexFlatIP storage,
+- dense retrieval with evidence scores.
+
+I also separated these from the later-stage skeletons that still contain
+NotImplementedError, such as full agent decide/act/synthesize, guardrails,
+reranking, evaluation metrics, RL, serving, and MLOps. This distinction was
+important because a supervisor may ask what actually runs today versus what is
+only architecturally reserved by the starter repository.
+
+I wrote the final guide to codebase-full-guide.md with sections for:
+
+- project goal and domain,
+- repository structure,
+- fixed data contracts,
+- configuration,
+- full data flow,
+- file-by-file explanations,
+- generated artifacts,
+- tests,
+- current limitations,
+- and likely viva/supervisor questions.
+
+This helped convert the coding work into something I could defend verbally.
+
+
+Conversation 11: Planning a Bangla-Finetuned Embedding Model Experiment
+------------------------------------------------------------------------
+
+Student:
+Okay I want to try out a Bangla fine-tuned model for embedding generation that
+I found in Hugging Face:
+https://huggingface.co/shihab17/bangla-sentence-transformer
+
+Preferably in ONNX format if that is not much complexity. Give me a high-level
+plan on what changes you will be making in the codebase. After I approve of
+that we will go on to implementation.
+
+AI:
+I checked the Hugging Face model page before giving the plan, because model
+files and recommended loading methods can change. The model was a
+SentenceTransformer-style Bangla sentence embedding model based on multilingual
+transformer components. I did not see a simple ready-made ONNX path that would
+justify adding conversion complexity immediately.
+
+I proposed a two-tier plan:
+
+1. First use the normal SentenceTransformer loading path.
+   The existing embed.py already supported arbitrary SentenceTransformer model
+   names, so the lowest-risk experiment was to change the config model name and
+   rebuild the FAISS index.
+
+2. Keep ONNX as an optional future optimization.
+   ONNX would require exporting the transformer, preserving tokenizer behavior,
+   implementing pooling and normalization correctly, and adding onnxruntime or
+   optimum dependencies. I recommended postponing that until the model proved
+   useful in retrieval quality.
+
+The planned codebase changes were:
+
+- update configs/config.yaml to use shihab17/bangla-sentence-transformer,
+- keep the previous MiniLM configuration commented for rollback,
+- rebuild data/processed/index because embedding dimensions and vector values
+  change when the embedding model changes,
+- update documentation so the pipeline diagram and design choices reflect the
+  active embedding model,
+- compare retrieval quality and speed manually against the MiniLM baseline.
+
+This was an example of using the agent for research and planning first, not
+immediately allowing it to add unnecessary dependencies.
+
+
+Conversation 12: Switching the Embedding Model to Bangla Sentence Transformer
+------------------------------------------------------------------------------
+
+Student:
+Got it, ONNX not needed for now. Just want to test out the model to see how
+good and fast it is. Keep the current settings commented out so that it can be
+restored later easily.
+
+Modify the code to use the given Hugging Face model
+https://huggingface.co/shihab17/bangla-sentence-transformer as an embedding
+model.
+
+AI:
+I first inspected configs/config.yaml, embed.py, and the repository references
+to all-MiniLM or hardcoded 384-dimensional assumptions. The key finding was that
+the implementation did not hardcode 384 in the vector-store logic. embed.py
+already asks the loaded SentenceTransformer model for its actual embedding
+dimension using get_sentence_embedding_dimension().
+
+I then made the change reversible instead of destructive:
+
+- The previous MiniLM setting was left commented in configs/config.yaml.
+- The active embedding model was changed to:
+  shihab17/bangla-sentence-transformer.
+- The expected dimension was set to 768.
+- The batch size was reduced from 32 to 16 because the Bangla model is larger
+  than MiniLM and CPU memory/speed could become a bottleneck.
+
+I also updated:
+
+- reports/pipeline_diagram.md, so the diagram no longer claimed the pipeline
+  used all-MiniLM-L6-v2,
+- configs/design_choices.md, so the design notes documented that the team was
+  now testing a Bangla-finetuned SBERT model while keeping MiniLM as a rollback
+  baseline.
+
+Verification:
+
+- I loaded configs/config.yaml with the project virtualenv and confirmed the
+  active embed config parsed correctly.
+- I did not rebuild the FAISS index immediately, because the student wanted the
+  code modification first. I noted that the existing index artifacts would still
+  reflect the previous embedding model until bash scripts/build_index.sh was run
+  again.
+
+
+Conversation 13: Making the Large Embedding Model Download Only Once Per Machine
+--------------------------------------------------------------------------------
+
+Student:
+I do not want to download this 1GB model every time the code runs. Only download
+once per machine and then use that. We can keep the downloaded files in
+./data/interim directory like all-MiniLM is currently stored, already
+gitignored. Ensure that this mechanism exists; if it does not, modify the code
+to reflect this decision.
+
+AI:
+I checked the current cache behavior before changing code. build_index.sh
+already set:
+
+HF_HOME=data/interim/huggingface
+
+This meant the build script encouraged Hugging Face downloads to stay inside the
+project-local gitignored data/interim directory. However, embed.py itself did
+not explicitly pass a cache folder to SentenceTransformer. That meant ad hoc
+runs from notebooks, tests, or direct Retriever usage might still use the
+default user-level cache instead of the project-local cache.
+
+I modified the code to make the caching decision explicit and consistent:
+
+1. configs/config.yaml
+   I added model_cache_dir to both the active Bangla model and the commented
+   MiniLM rollback config:
+
+   model_cache_dir: data/interim/huggingface/hub
+
+   This path matches the existing Hugging Face cache layout already present in
+   the project.
+
+2. src/doc_agent/index/embed.py
+   I updated Encoder so it reads embed.model_cache_dir, creates the directory if
+   missing, and passes it to:
+
+   SentenceTransformer(..., cache_folder=...)
+
+   This means the model is downloaded once per machine into data/interim and
+   reused in later runs. It also means notebooks, scripts, and retrieval tests
+   use the same cache mechanism instead of depending only on build_index.sh.
+
+3. In-memory model reuse
+   I updated the class-level _loaded_models cache key to include:
+
+   - model name,
+   - device,
+   - cache directory.
+
+   This prevents accidentally reusing the wrong loaded model if the same process
+   switches cache paths or devices.
+
+4. src/doc_agent/index/store.py
+   I added embedding_cache_dir to metadata.json for future index builds. This
+   improves experiment tracking because metadata will show which embedding model
+   and which local cache location produced a FAISS index.
+
+Verification:
+
+- configs/config.yaml loaded successfully.
+- embed.py and store.py compiled successfully.
+- The local hash fallback still worked, proving the Encoder path remained
+  functional without forcing a large model download during the check.
+- I confirmed that the project already had cache folders under:
+  data/interim/huggingface/hub/models--sentence-transformers--all-MiniLM-L6-v2
+  data/interim/huggingface/hub/models--shihab17--bangla-sentence-transformer
+
+I could not run pytest because the current virtualenv did not include pytest,
+but the lightweight compile and import checks passed.
+
+
+SHORT REFLECTION
+================
+
+For A2, I used the AI agent as a coding collaborator, but I kept control over
+scope, grading strategy, and team boundaries. I did not let the agent rewrite
+the whole project. Instead, I narrowed the work to the part I led: chunking,
+embedding, vector storage, retrieval testing, build-index setup, documentation,
+and later embedding-model experimentation.
+
+The main ideas I accepted were:
+
+- Using all-MiniLM-L6-v2 as the first lightweight embedding baseline because it
+  is easy to install and has a small 384-dimensional output suitable for FAISS.
+- Implementing semantic chunking by comparing adjacent sentence embeddings,
+  which directly supports the bonus requirement.
+- Keeping real pipeline experiments outside the submission codebase when they
+  were only for manual verification.
+- Using a zip-based dataset download instead of downloading 704 Drive files
+  individually, because it avoided rate-limit problems.
+- Installing the local project as an editable package so scripts can import
+  doc_agent reliably.
+- Creating a full codebase guide after implementation so I could explain the
+  actual data flow and defend the work in front of my supervisor.
+- Testing a Bangla-finetuned sentence-transformer after the MiniLM baseline,
+  because the corpus is Bangla mathematics and retrieval quality may benefit
+  from a language-specialized embedding model.
+
+The main changes I requested or constrained were:
+
+- I postponed data decisions until a team meeting instead of letting the AI
+  complete that part alone.
+- I avoided modifying ingestion and preprocessing once teammates were
+  responsible for those stages.
+- I asked for clean, modular code with small comments instead of bloated
+  abstractions.
+- I required hand-test criteria so that I could verify the implementation myself
+  rather than blindly accepting generated code.
+- I switched the local config from cuda to cpu after checking that this machine
+  has no available CUDA device.
+- I explicitly rejected ONNX for the Bangla embedding model at this stage
+  because conversion and runtime complexity were not justified before measuring
+  retrieval-quality benefit.
+- I required the large Bangla embedding model to download only once per machine
+  into data/interim, which is gitignored, instead of repeatedly downloading it
+  during every run.
+
+The most useful part of working with the agent was using it to move quickly
+through codebase navigation, implementation, testing, and documentation while I
+made the architectural decisions. The agent helped expose hidden integration
+problems, such as doc_agent not being importable from build_index.sh, Hugging
+Face cache paths being unwritable, and the local environment requesting CUDA
+when only CPU was available. These are exactly the kinds of issues that can make
+a pipeline look correct in isolated modules but fail during a full build.
+
+The later work shows a more mature use of agentic coding. After the main A2
+pipeline was working, I did not just ask the AI to "explain everything." I used
+it to create a structured codebase guide that separates implemented behavior
+from planned skeleton interfaces. This matters because, in a viva or supervisor
+discussion, overclaiming is risky. The guide helps me defend exactly what runs
+today: OCR-to-chunk-to-embed-to-FAISS-to-retrieval.
+
+The embedding-model experiment also shows controlled iteration. I first used
+MiniLM as a practical baseline, then planned a Bangla-specialized comparison,
+kept the old config commented for rollback, and made model caching explicit by
+passing a project-local model_cache_dir directly into SentenceTransformer. This
+made the behavior reproducible for teammates and avoided depending only on
+environment variables.
+
+Overall, this transcript demonstrates that I used the AI agent for codebase
+analysis, implementation, debugging, reproducibility, model selection, rollback
+planning, documentation, and supervisor-facing explanation. I accepted
+AI-generated implementation where it matched the project constraints and
+rejected or redirected work when it crossed team boundaries or made assumptions
+about data. This is the kind of agentic coding workflow I want to present: fast
+iteration with clear engineering judgment, not blind code generation.
