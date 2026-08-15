@@ -9,7 +9,13 @@ cd "$ROOT_DIR"
 # When this repository is opened through WSL but its dependencies were
 # installed in the Windows .venv, use that interpreter and its Windows
 # Tesseract installation rather than asking WSL to install a second stack.
-PYTHON_BIN="${PYTHON_BIN:-python}"
+if [ -z "${PYTHON_BIN:-}" ]; then
+  if [ -x ".venv/bin/python" ]; then
+    PYTHON_BIN=".venv/bin/python"
+  else
+    PYTHON_BIN="python"
+  fi
+fi
 WINDOWS_TESSERACT_AVAILABLE=false
 if [ -n "${WSL_INTEROP:-}" ] && [ -x ".venv/Scripts/python.exe" ]; then
   PYTHON_BIN=".venv/Scripts/python.exe"
@@ -80,4 +86,6 @@ for language in ben eng; do
   fi
 done
 
-PYTHONUTF8=1 "$PYTHON_BIN" scripts/run_index.py
+export HF_HOME="${HF_HOME:-$ROOT_DIR/data/interim/huggingface}"
+
+PYTHONUTF8=1 PYTHONUNBUFFERED=1 "$PYTHON_BIN" scripts/run_index.py
