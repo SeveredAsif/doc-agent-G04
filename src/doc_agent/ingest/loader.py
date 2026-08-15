@@ -6,10 +6,11 @@ def load_pages(cfg: dict) -> list[Page]:
     """Read data/raw/ -> list[Page]. IMPLEMENT."""
     from pathlib import Path
 
-    del cfg
     raw_dir = Path("data/raw")
     if not raw_dir.is_dir():
         raise FileNotFoundError(f"Raw data directory does not exist: {raw_dir}")
+
+    max_pages = cfg.get("max_pages") if isinstance(cfg, dict) else None
 
     image_extensions = {".jpeg", ".jpg", ".png", ".tif", ".tiff"}
     image_paths = sorted(
@@ -20,6 +21,12 @@ def load_pages(cfg: dict) -> list[Page]:
         ),
         key=lambda path: path.as_posix(),
     )
+
+    if max_pages is not None:
+        max_pages = int(max_pages)
+        if max_pages <= 0:
+            raise ValueError("max_pages must be positive when set")
+        image_paths = image_paths[:max_pages]
 
     pages: list[Page] = []
     for image_path in image_paths:
