@@ -48,6 +48,12 @@ make serve        # FastAPI + Gradio
 ```
 See `STRUCTURE.md` for the rules CI enforces.
 
+## Embedding model
+
+Stage 4 uses `sentence-transformers/all-MiniLM-L6-v2` by default. Install the
+declared dependency with `uv sync` (or `python -m pip install sentence-transformers`)
+before building the index; the first run downloads the model weights.
+
 ## Bangla OCR with Tesseract
 
 This project uses Tesseract as its printed Bangla/English OCR baseline. It
