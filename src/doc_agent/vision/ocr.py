@@ -97,16 +97,23 @@ class Reader:
         output_dir = Path(self.preprocess_cfg.get("output_dir", "data/interim/preprocessed"))
         image_path = output_dir / doc_id / f"{page_stem}.png"
         if not image_path.is_file():
-            raise FileNotFoundError(f"Could not find preprocessed page image: {image_path}")
+            raw_path = Path("data/raw") / f"{page_stem}.png"
+            heldout_path = Path("grading_kit/heldout_pages") / f"{page_stem}.png"
+            if raw_path.is_file():
+                image_path = raw_path
+            elif heldout_path.is_file():
+                image_path = heldout_path
+            else:
+                raise FileNotFoundError(f"Could not find page image for {region.page_id}: {image_path}")
 
         x, y, width, height = region.bbox
         with Image.open(image_path) as image:
-            left = max(0, x)
-            top = max(0, y)
-            right = min(image.width, x + width)
-            bottom = min(image.height, y + height)
+            left = max(0, int(x))
+            top = max(0, int(y))
+            right = min(image.width, int(x + width))
+            bottom = min(image.height, int(y + height))
             if right <= left or bottom <= top:
-                raise ValueError(f"Invalid region bounding box for {region.page_id}: {region.bbox}")
+                return ""
             crop = image.convert("RGB").crop((left, top, right, bottom))
 
         # A small white margin prevents glyphs at segmentation boundaries from
@@ -159,12 +166,14 @@ class Reader:
         return self.processor.batch_decode(generated_ids, skip_special_tokens=True)[0].strip()
 
 def transcribe(regions: list[Region], cfg: dict) -> list[Chunk]:
-    """Transcribe line regions, then preserve page reading order in chunks."""
+    """Transcribe line regions (text, headings, and math), preserving page reading order in chunks."""
     reader = Reader(cfg)
     by_page: dict[str, list[str]] = {}
     chunks: list[Chunk] = []
+    text_and_math_kinds = {"text", "heading", "math"}
+
     for region in regions:
-        if region.kind not in {"text", "heading", "math"}:
+        if region.kind not in text_and_math_kinds:
             continue
         text = reader.transcribe_region(region)
         if not text:

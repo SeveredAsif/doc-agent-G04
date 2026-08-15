@@ -34,6 +34,7 @@ def run(pages: list[Page], cfg: dict) -> list[Page]:
 
     settings = cfg.get("preprocess", {})
     output_dir = Path(settings.get("output_dir", "data/interim/preprocessed"))
+    deskew = bool(settings.get("deskew", False))
     denoise_strength = settings.get("denoise_strength", 10)
     block_size = settings.get("adaptive_block_size", 31)
     threshold_offset = settings.get("adaptive_c", 15)
@@ -54,20 +55,21 @@ def run(pages: list[Page], cfg: dict) -> list[Page]:
         if image is None:
             raise FileNotFoundError(f"Could not read page image: {page.image_path}")
 
-        angle = _estimate_skew_angle(image)
-        if abs(angle) >= 0.3:
-            rotation = cv2.getRotationMatrix2D(
-                (image.shape[1] / 2.0, image.shape[0] / 2.0),
-                angle,
-                1.0,
-            )
-            image = cv2.warpAffine(
-                image,
-                rotation,
-                (image.shape[1], image.shape[0]),
-                flags=cv2.INTER_CUBIC,
-                borderMode=cv2.BORDER_REPLICATE,
-            )
+        if deskew:
+            angle = _estimate_skew_angle(image)
+            if abs(angle) >= 0.3:
+                rotation = cv2.getRotationMatrix2D(
+                    (image.shape[1] / 2.0, image.shape[0] / 2.0),
+                    angle,
+                    1.0,
+                )
+                image = cv2.warpAffine(
+                    image,
+                    rotation,
+                    (image.shape[1], image.shape[0]),
+                    flags=cv2.INTER_CUBIC,
+                    borderMode=cv2.BORDER_REPLICATE,
+                )
 
         denoised = cv2.fastNlMeansDenoising(image, None, denoise_strength, 7, 21)
         processed = cv2.adaptiveThreshold(

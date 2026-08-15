@@ -16,6 +16,7 @@ Refined Hybrid Layout Architecture:
 """
 from __future__ import annotations
 
+import json
 from pathlib import Path
 from typing import Any
 
@@ -120,7 +121,7 @@ def _isolate_figures_and_tables(
             if len(cell_cnts) >= 4:
                 x0, y0 = max(0, x - 6), max(0, y - 6)
                 x1, y1 = min(width, x + w + 6), min(height, y + h + 6)
-                fig_boxes.append({"kind": "table", "bbox": (x0, y0, x1 - x0, y1 - y0)})
+                fig_boxes.append({"kind": "figure", "bbox": (x0, y0, x1 - x0, y1 - y0)})
                 cv2.rectangle(fig_mask, (x0, y0), (x1, y1), 255, -1)
 
     # 2. Strict Geometric Drawing / Plot Detection
@@ -429,14 +430,14 @@ def _is_math_operator(
     return False
 
 
-def _classify_display_math_lines(
+def _classify_math_lines(
     text_mask: np.ndarray,
     classified_lines: list[dict[str, Any]],
     page_w: int,
     page_h: int,
     median_line_height: float,
 ) -> None:
-    """Classify entire line objects as kind='display_math' based on fill ratio, maatra continuity, fractions, and operators."""
+    """Classify entire line objects as kind='math' based on fill ratio, maatra continuity, fractions, and operators."""
     for line in classified_lines:
         if line["kind"] != "text":
             continue
@@ -501,7 +502,7 @@ def _classify_display_math_lines(
             is_math = True
 
         if is_math:
-            line["kind"] = "display_math"
+            line["kind"] = "math"
 
 
 def _sort_reading_order(
@@ -543,7 +544,10 @@ def detect(pages: list[Page], cfg: dict) -> list[Region]:
     pad_y = int(settings.get("line_padding_y", 6))
     pad_x = int(settings.get("line_padding_x", 8))
     heading_factor = float(settings.get("heading_factor", 1.45))
-    debug_output_dir = settings.get("debug_output_dir")
+    overlay_dir = settings.get("overlay_dir") or settings.get("debug_output_dir")
+    save_overlays = bool(settings.get("save_overlays", True)) if overlay_dir else False
+    metadata_path = settings.get("metadata_path")
+    save_metadata = bool(settings.get("save_metadata", True)) if metadata_path else False
     detect_math = bool(settings.get("detect_math", True))
 
     regions: list[Region] = []
@@ -626,9 +630,9 @@ def detect(pages: list[Page], cfg: dict) -> list[Region]:
 
             classified_lines.append({"bbox": bbox, "kind": kind, "x": x, "y": y, "w": w, "h": h})
 
-        # 9. Math Detection (Whole-Line display_math classification)
+        # 9. Math Detection (Whole-Line math classification)
         if detect_math:
-            _classify_display_math_lines(text_only, classified_lines, width, height, median_height)
+            _classify_math_lines(text_only, classified_lines, width, height, median_height)
 
         # 10. Combine all elements and sort reading order
         all_elements = classified_lines + [
@@ -648,16 +652,64 @@ def detect(pages: list[Page], cfg: dict) -> list[Region]:
         for elem in ordered_elements:
             regions.append(Region(page_id=page.id, bbox=elem["bbox"], kind=elem["kind"]))
 
-        # 11. Debug Visualization Overlay
-        if debug_output_dir:
+        # 11. Compute Quantitative Page-Level Area Metrics
+        total_page_area = int(width * height)
+        fig_boxes = [e for e in ordered_elements if e["kind"] == "figure"]
+        math_boxes = [e for e in ordered_elements if e["kind"] == "math"]
+        text_boxes = [e for e in ordered_elements if e["kind"] in ("text", "heading")]
+        heading_boxes = [e for e in ordered_elements if e["kind"] == "heading"]
+
+        fig_area_px = int(sum(int(e["w"]) * int(e["h"]) for e in fig_boxes))
+        math_area_px = int(sum(int(e["w"]) * int(e["h"]) for e in math_boxes))
+        text_area_px = int(sum(int(e["w"]) * int(e["h"]) for e in text_boxes))
+
+        page_metrics = {
+            "num_headings": int(len(heading_boxes)),
+            "num_text": int(len([e for e in text_boxes if e["kind"] == "text"])),
+            "num_math": int(len(math_boxes)),
+            "num_figures": int(len(fig_boxes)),
+            "fig_area_px": fig_area_px,
+            "math_area_px": math_area_px,
+            "text_area_px": text_area_px,
+            "fig_area_frac": float(round(fig_area_px / max(1, total_page_area), 4)),
+            "math_area_frac": float(round(math_area_px / max(1, total_page_area), 4)),
+            "text_area_frac": float(round(text_area_px / max(1, total_page_area), 4)),
+            "total_ink_bbox_frac": float(
+                round((fig_area_px + math_area_px + text_area_px) / max(1, total_page_area), 4)
+            ),
+        }
+
+        # 12. Save Region Metadata JSONL
+        if metadata_path and save_metadata:
+            page_record = {
+                "page_id": str(page.id),
+                "doc_id": str(page.doc_id),
+                "image_path": str(page.image_path),
+                "width": int(width),
+                "height": int(height),
+                "total_page_area": total_page_area,
+                "regions": [
+                    {
+                        "bbox": [int(v) for v in elem["bbox"]],
+                        "kind": str(elem["kind"]),
+                        "area": int(elem["bbox"][2] * elem["bbox"][3]),
+                    }
+                    for elem in ordered_elements
+                ],
+                "metrics": page_metrics,
+            }
+            meta_file = Path(metadata_path)
+            meta_file.parent.mkdir(parents=True, exist_ok=True)
+            with open(meta_file, "a", encoding="utf-8") as mf:
+                mf.write(json.dumps(page_record, default=int, ensure_ascii=False) + "\n")
+
+        # 13. Save Bounding-Box Overlay Image
+        if overlay_dir and save_overlays:
             color_map = {
                 "heading": (255, 191, 0),       # Deep Sky Blue
                 "text": (50, 205, 50),          # Lime Green
                 "figure": (0, 0, 230),          # Red
-                "table": (0, 215, 255),         # Gold
-                "inline_math": (255, 0, 255),   # Magenta
-                "display_math": (180, 0, 255),  # Electric Purple
-                "math": (255, 0, 255),          # Magenta
+                "math": (180, 0, 255),          # Electric Purple
             }
             overlay = cv2.cvtColor(image, cv2.COLOR_GRAY2BGR)
             for index, elem in enumerate(ordered_elements):
@@ -665,7 +717,7 @@ def detect(pages: list[Page], cfg: dict) -> list[Region]:
                 bkind = elem["kind"]
                 color = color_map.get(bkind, (0, 255, 255))
                 cv2.rectangle(overlay, (bx, by), (bx + bw, by + bh), color, 2)
-                tag_label = "M" if "math" in bkind else bkind[0].upper()
+                tag_label = "M" if bkind == "math" else bkind[0].upper()
                 tag_str = f"{index}:{tag_label}"
                 cv2.putText(
                     overlay,
@@ -677,7 +729,8 @@ def detect(pages: list[Page], cfg: dict) -> list[Region]:
                     2,
                     cv2.LINE_AA,
                 )
-            output_path = Path(debug_output_dir) / page.doc_id / f"{page.id.rsplit('__', 1)[-1]}.png"
+            page_filename = f"{page.id.rsplit('__', 1)[-1]}.png" if "__" in page.id else f"{Path(page.image_path).stem}.png"
+            output_path = Path(overlay_dir) / page.doc_id / page_filename
             output_path.parent.mkdir(parents=True, exist_ok=True)
             if not cv2.imwrite(str(output_path), overlay):
                 raise OSError(f"Could not write layout overlay: {output_path}")
