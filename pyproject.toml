@@ -21,6 +21,7 @@ dependencies = [
   "numpy>=1.26,<2.0",
   "opencv-python>=4.9,<4.12",
   "gdown>=6.1.0",
+  "pytest>=9.1.1",
 ]
 
 [project.optional-dependencies]

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import hashlib
+from pathlib import Path
 from typing import Any
 
 import numpy as np
@@ -16,7 +17,7 @@ class Encoder:
     available only when explicitly requested for offline unit tests.
     """
 
-    _loaded_models: dict[tuple[str, str], Any] = {}
+    _loaded_models: dict[tuple[str, str, str], Any] = {}
 
     def __init__(self, cfg: dict) -> None:
         embed_cfg = cfg.get("embed", {})
@@ -25,6 +26,9 @@ class Encoder:
         )
         self.dim = int(embed_cfg.get("dim", 384))
         self.batch_size = int(embed_cfg.get("batch_size", 32))
+        self.cache_dir = Path(
+            embed_cfg.get("model_cache_dir", "data/interim/huggingface/hub")
+        )
         self.allow_hash_fallback = bool(embed_cfg.get("allow_hash_fallback", False))
         self._model = None
 
@@ -33,10 +37,15 @@ class Encoder:
                 from sentence_transformers import SentenceTransformer
 
                 device = cfg.get("device", "cpu")
-                cache_key = (self.model_name, device)
+                self.cache_dir.mkdir(parents=True, exist_ok=True)
+                cache_key = (self.model_name, device, self.cache_dir.as_posix())
                 self._model = self._loaded_models.get(cache_key)
                 if self._model is None:
-                    self._model = SentenceTransformer(self.model_name, device=device)
+                    self._model = SentenceTransformer(
+                        self.model_name,
+                        device=device,
+                        cache_folder=self.cache_dir.as_posix(),
+                    )
                     self._loaded_models[cache_key] = self._model
                 self.dim = int(self._model.get_sentence_embedding_dimension())
             except Exception as exc:
@@ -45,12 +54,12 @@ class Encoder:
                         f"Could not load embedding model {self.model_name!r}. "
                         "Install project dependencies with `uv sync` (or "
                         "`python -m pip install sentence-transformers`) and ensure "
-                        "the model can be downloaded once. Set "
+                        f"the model can be downloaded once into {self.cache_dir}. Set "
                         "embed.allow_hash_fallback=true only for offline smoke tests."
                     ) from exc
                 self.model_name = f"local:hashing-fallback:{self.model_name}"
 
-    # Fallback Hashing (For onffline testing only)
+    # Fallback hashing for offline testing only.
     def encode_texts(self, texts: list[str]) -> np.ndarray:
         if not texts:
             return np.zeros((0, self.dim), dtype=np.float32)

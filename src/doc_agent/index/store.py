@@ -66,6 +66,7 @@ def build(chunks, vectors, cfg: dict) -> None:
         "chunk_count": len(chunks),
         "embedding_dim": int(vectors.shape[1]),
         "embedding_model": cfg.get("embed", {}).get("model"),
+        "embedding_cache_dir": cfg.get("embed", {}).get("model_cache_dir"),
         "index_type": index_type,
         "normalized_vectors": True,
     }
