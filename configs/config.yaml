@@ -6,7 +6,9 @@ preprocess: {output_dir: "data/interim/preprocessed", denoise_strength: 10, adap
 enhance:   {enabled: true,  model: "unet_small", type: "diffusion"}   # or "vae" / "none"
 layout:    {model: "classical:projection-lines", row_ink_fraction: 0.01, min_line_height: 12, max_line_height: 140, line_gap: 5, line_padding: 12, min_line_width_fraction: 0.03, debug_output_dir: "reports/figures/layout"}
 ocr:       {backend: "tesseract", tessdata_dir: "data/interim/tessdata", languages: "ben+eng", psm: 7, crop_padding: 8, model: "nightsagittariuswolf/SWIN_TrOCR_Bangla_model", processor: "nightsagittariuswolf/SWIN_trOCR_Bangla_processor", model_cache_dir: "data/interim/models", max_new_tokens: 128, finetune: true}    # Baseline: Tesseract on one Bangla/English text line; keep TrOCR settings for a later comparison.
-embed:     {model: "sentence-transformers/all-MiniLM-L6-v2", dim: 384, batch_size: 32, allow_hash_fallback: false}
+# Previous fast multilingual baseline; uncomment to restore.
+# embed:     {model: "sentence-transformers/all-MiniLM-L6-v2", dim: 384, batch_size: 32, allow_hash_fallback: false}
+embed:     {model: "shihab17/bangla-sentence-transformer", dim: 768, batch_size: 16, allow_hash_fallback: false}  # Bangla-finetuned SBERT; larger/slower than MiniLM, rebuild index after switching.
 index:     {type: "faiss:flat-ip", chunking: "semantic", chunk_tokens: 256, overlap: 32, min_chunk_tokens: 24, semantic_similarity_threshold: 0.35}  # HNSW crashes in faiss-cpu 1.8 on this Windows/Python 3.12 setup.
 retrieve:  {k: 10, k_step: 10, k_max: 40, weak_threshold: 0.35, rerank: true, reranker: "cross-encoder/ms-marco-MiniLM-L6-v2"}   # k_step/k_max/weak_threshold drive evidence-gated re-search
 agent:     {max_steps: 8, autonomy: "act-with-approval", budget_usd: 0.05}
